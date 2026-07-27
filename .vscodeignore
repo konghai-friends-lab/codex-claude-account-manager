@@ -1,0 +1,11 @@
+.gitignore
+.vscodeignore
+.workbuddy/**
+AGENTS.md
+nul
+src/**
+test/**
+node_modules/**
+tsconfig.json
+package-lock.json
+**/*.ts

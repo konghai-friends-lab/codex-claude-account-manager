@@ -1,0 +1,246 @@
+{
+  "name": "codex-account-manager",
+  "displayName": "Codex Account Manager",
+  "description": "管理多个 Codex 账号、自动刷新 5 小时/7 天可用额度，并同步切换官方 Codex 扩展账号",
+  "version": "0.0.70",
+  "publisher": "raozhiven",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "icon": "media/icon.png",
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexAccountManager.manageAccounts",
+        "title": "Codex 账号：管理账号"
+      },
+      {
+        "command": "codexAccountManager.importCurrentAuth",
+        "title": "Codex 账号：导入当前账号"
+      },
+      {
+        "command": "codexAccountManager.importAuthFile",
+        "title": "Codex 账号：从文件导入账号"
+      },
+      {
+        "command": "codexAccountManager.exportAccounts",
+        "title": "Codex 账号：导出账号配置包"
+      },
+      {
+        "command": "codexAccountManager.importAccountBundle",
+        "title": "Codex 账号：导入账号配置包"
+      },
+      {
+        "command": "codexAccountManager.renameAccount",
+        "title": "Codex 账号：重命名账号"
+      },
+      {
+        "command": "codexAccountManager.removeAccount",
+        "title": "Codex 账号：删除账号"
+      },
+      {
+        "command": "codexAccountManager.switchAccount",
+        "title": "Codex 账号：切换当前账号"
+      },
+      {
+        "command": "codexAccountManager.switchToLastAccount",
+        "title": "Codex 账号：切回上一个账号"
+      },
+      {
+        "command": "codexAccountManager.loginNewAccount",
+        "title": "Codex 账号：退出当前账号并登录新账号"
+      },
+      {
+        "command": "codexAccountManager.refreshQuotas",
+        "title": "Codex 账号：刷新额度"
+      },
+      {
+        "command": "codexAccountManager.showAccountHealth",
+        "title": "Codex 账号：账号健康检查"
+      },
+      {
+        "command": "codexAccountManager.quickFixAccountHealth",
+        "title": "Codex 账号：快速修复问题账号"
+      },
+      {
+        "command": "codexAccountManager.openCurrentAuthPath",
+        "title": "Codex 账号：打开当前 auth.json 路径"
+      },
+      {
+        "command": "codexAccountManager.openSettings",
+        "title": "Codex 账号：修改配置"
+      },
+      {
+        "command": "codexAccountManager.toggleAccountSortOrder",
+        "title": "Codex 账号：切换账号排序升降序"
+      },
+      {
+        "command": "codexAccountManager.setAccountSortBy",
+        "title": "Codex 账号：设置账号排序方式"
+      },
+      {
+        "command": "codexAccountManager.dismissExternalAuthNotice",
+        "title": "Codex 账号：关闭新账号提醒"
+      },
+      {
+        "command": "codexAccountManager.activateAccount",
+        "title": "Codex 账号：激活指定账号"
+      }
+    ],
+    "menus": {
+      "statusBar/item/context": [
+        {
+          "command": "codexAccountManager.manageAccounts",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "navigation"
+        },
+        {
+          "command": "codexAccountManager.refreshQuotas",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexAccountManager.openCurrentAuthPath",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexAccountManager.loginNewAccount",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexAccountManager.switchToLastAccount",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexAccountManager.showAccountHealth",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexAccountManager.quickFixAccountHealth",
+          "when": "statusBarItemId == codex-account-manager.status",
+          "group": "2_actions"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codex Account Manager",
+      "properties": {
+        "codexAccountManager.refreshIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "description": "自动刷新所有账号额度的时间间隔（分钟），设为 0 则禁用自动刷新"
+        },
+        "codexAccountManager.restartExtensionHostAfterSwitch": {
+          "type": "boolean",
+          "default": true,
+          "description": "切换到另一个账号后自动重启扩展宿主，让官方 Codex 扩展立即重新读取 auth.json；比整窗重载更轻量"
+        },
+        "codexAccountManager.restartCodexAppAfterSwitch": {
+          "type": "boolean",
+          "default": false,
+          "description": "切换账号后自动重启 Codex 桌面应用，让它重新读取 auth.json"
+        },
+        "codexAccountManager.showEmailInTooltip": {
+          "type": "boolean",
+          "default": true,
+          "description": "在状态栏悬停提示中显示账号邮箱"
+        },
+        "codexAccountManager.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "description": "请求 Codex 额度接口的超时时间（秒）"
+        },
+        "codexAccountManager.autoSwitchThresholdPercent": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "刷新全部额度后，如果当前账号最低可用额度低于此百分比则自动切号；设为 0 表示关闭自动切号"
+        },
+        "codexAccountManager.autoSwitchPriority": {
+          "type": "string",
+          "default": "lowest-window-first",
+          "enum": [
+            "lowest-window-first",
+            "primary-first",
+            "secondary-first"
+          ],
+          "enumDescriptions": [
+            "优先比较账号的最低窗口剩余额度，再用 5h / 7d 作为补充排序",
+            "优先比较 5 小时窗口剩余额度，再看 7 天和最低窗口",
+            "优先比较 7 天窗口剩余额度，再看 5 小时和最低窗口"
+          ],
+          "description": "自动切号时用于比较候选账号的额度优先级策略"
+        },
+        "codexAccountManager.autoSwitchRequiresCodexIdle": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动切号前先判断官方 Codex 最近是否仍在活动；开启后只有在检测到 Codex 空闲时才会真正切号"
+        },
+        "codexAccountManager.codexIdleThresholdSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 15,
+          "maximum": 600,
+          "description": "把 Codex 视为空闲前，要求其 sessions 最近无写入的最短秒数；仅在开启 autoSwitchRequiresCodexIdle 时生效"
+        },
+        "codexAccountManager.accountSortBy": {
+          "type": "string",
+          "default": "smart",
+          "enum": [
+            "smart",
+            "min-quota",
+            "reset-time",
+            "name"
+          ],
+          "enumDescriptions": [
+            "综合额度与重置时间，优先推荐最值得使用的账号",
+            "按 5h 和 7d 中最低的可用额度百分比排序",
+            "按 5h 和 7d 中最快的重置时间排序",
+            "按账号名称排序"
+          ],
+          "description": "状态栏悬停列表中账号的排序方式"
+        },
+        "codexAccountManager.accountSortOrder": {
+          "type": "string",
+          "default": "desc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "enumDescriptions": [
+            "升序（额度从低到高、重置时间从快到慢、名称 A→Z）",
+            "降序（额度从高到低、重置时间从慢到快、名称 Z→A）"
+          ],
+          "description": "状态栏悬停列表中账号的排序方向"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "test": "npm run compile && node --test test/*.test.js",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.6.3"
+  }
+}
