@@ -263,6 +263,10 @@ npm run compile
 
 然后在 VS Code 中按 `F5` 启动一个 Extension Development Host 进行调试。
 
+## 贡献者 / Contributors
+
+- [@Raozhiven](https://github.com/Raozhiven) — 共同开发
+
 ## 建议的后续增强
 
 如果你准备继续往下做，下一步最值得补的是：
