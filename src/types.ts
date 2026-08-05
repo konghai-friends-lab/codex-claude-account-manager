@@ -50,6 +50,28 @@ export interface GrokPeriodSnapshot {
   error?: string;
 }
 
+/**
+ * 本机当前 Claude Code 登录的 5h / 7d 用量快照。
+ * 与 Grok 同属「只读单一本机登录」模型，不存凭据、不切账号。
+ */
+export interface ClaudeUsageSnapshot {
+  /** 5 小时窗口；不可用时省略（不要填 0，占位由展示层输出「暂不可用」） */
+  fiveHour?: QuotaWindow;
+  /**
+   * 5h 窗口重置的绝对时间（ISO）。
+   * 展示倒计时必须以本字段现算，避免冻结 resetAfterSeconds。
+   */
+  fiveHourResetAt?: string;
+  /** 7 天窗口；不可用时省略 */
+  sevenDay?: QuotaWindow;
+  /** 7d 窗口重置的绝对时间（ISO），语义同 fiveHourResetAt */
+  sevenDayResetAt?: string;
+  fetchedAt: string;
+  statusCode?: number;
+  /** 不可用原因（未登录 / 鉴权失败 / 解析失败 / 网络错误等），供占位展示 */
+  error?: string;
+}
+
 export interface TokenHealthSnapshot {
   hasRefreshToken: boolean;
   lastRecoveryAttemptAt?: string;
