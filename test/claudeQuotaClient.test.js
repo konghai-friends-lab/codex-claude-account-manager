@@ -174,3 +174,56 @@ test("ClaudeQuotaClient 解析成功响应", async () => {
   assert.equal(snap.fiveHour.availablePercent, 93);
   assert.equal(snap.sevenDay.availablePercent, 97);
 });
+
+test("慢速滴流响应必须被端到端超时掐断", async () => {
+  // 回归守护：request.setTimeout 是「空闲超时」，对端每隔一小段时间滴一个
+  // 字节就能无限重置它，Promise 于是永远挂着。而它挂着会占住 refreshing
+  // 标志，连带让 Codex 与 Grok 也停止刷新——正是本改动承诺不会发生的事。
+  const http = require("node:http");
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    const timer = setInterval(() => res.write(" "), 50);
+    res.on("close", () => clearInterval(timer));
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+
+  try {
+    const client = new ClaudeQuotaClient({ accessToken: FAKE_TOKEN }, 400);
+    // 直连本地测试服务器，绕开写死的 https URL
+    client.requestUsage = function () {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let deadline;
+        const finish = (fn) => {
+          if (settled) return;
+          settled = true;
+          if (deadline) clearTimeout(deadline);
+          fn();
+        };
+        const req = http.request({ port, path: "/" }, (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c) => { body += c; });
+          res.on("end", () => finish(() => resolve({ body, statusCode: 200 })));
+        });
+        req.setTimeout(400, () => { req.destroy(); finish(() => reject(new Error("空闲超时"))); });
+        deadline = setTimeout(() => { req.destroy(); finish(() => reject(new Error("请求超时（端到端）"))); }, 400);
+        req.on("error", () => finish(() => reject(new Error("socket error"))));
+        req.end();
+      });
+    };
+
+    const started = Date.now();
+    const snap = await client.fetchUsage();
+    const elapsed = Date.now() - started;
+
+    assert.ok(elapsed < 3000, `必须被截止时间掐断，实际耗时 ${elapsed}ms`);
+    assert.ok(snap.error, "超时应降级为占位快照");
+    assert.equal(snap.fiveHour, undefined);
+    assert.equal(snap.sevenDay, undefined);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

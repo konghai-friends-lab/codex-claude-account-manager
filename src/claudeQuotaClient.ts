@@ -233,11 +233,16 @@ export class ClaudeQuotaClient {
       };
 
       let settled = false;
+      let deadline: NodeJS.Timeout | undefined;
       const finish = (handler: () => void): void => {
         if (settled) {
           return;
         }
         settled = true;
+        if (deadline) {
+          clearTimeout(deadline);
+          deadline = undefined;
+        }
         handler();
       };
 
@@ -300,13 +305,25 @@ export class ClaudeQuotaClient {
         });
       });
 
+      // request.setTimeout 只是「空闲超时」：只要对端持续滴入字节就会被不断重置，
+      // 慢速滴流响应可以让这个 Promise 永远挂着。而它挂着就会一直占住
+      // refreshAllQuotas 的 refreshing 标志，导致 Codex 与 Grok 也停止刷新。
+      // 因此必须另设一个覆盖 DNS/连接/响应体全过程的端到端截止时间。
       request.setTimeout(this.timeoutMs, () => {
-        // 同上：拆掉超时也必须真正销毁请求
         request.destroy();
         finish(() => {
           reject(new Error(`Claude usage 请求超时（${this.timeoutMs}ms）`));
         });
       });
+
+      deadline = setTimeout(() => {
+        request.destroy();
+        finish(() => {
+          reject(new Error(`Claude usage 请求超时（${this.timeoutMs}ms）`));
+        });
+      }, this.timeoutMs);
+      // 不要让这个定时器把 Node 进程吊住
+      deadline.unref?.();
 
       request.on("error", (error) => {
         finish(() => reject(error));
