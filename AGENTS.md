@@ -19,7 +19,9 @@ Secret Storage，刷新额度，并将所选账号写回 Codex 本地的 `auth.j
 | `src/auth.ts` | 多平台 Codex 路径解析、安全解析与原子写入 `auth.json`。 |
 | `src/quotaClient.ts` | Codex 额度请求及响应头解析。 |
 | `src/grokAuth.ts` | 本机 Grok `auth.json` 只读解析（不写回、不进 SecretStorage）。 |
-| `src/grokQuotaClient.ts` | Grok Build 周期剩余（billing credits）请求与解析。 |
+| `src/grokQuotaClient.ts` | Grok Build 周期剩余（billing credits）请求与解析。外部非稳定集成。 |
+| `src/claudeAuth.ts` | 本机 Claude Code 凭据只读解析（macOS Keychain 优先，回退 `~/.claude/.credentials.json`；不写回、不进 SecretStorage）。 |
+| `src/claudeQuotaClient.ts` | Claude Code 5h / 7d 用量请求与解析。外部非稳定集成。 |
 | `src/tokenRecovery.ts` | refresh token 刷新流程及认证数据标准化。 |
 | `src/statusBar.ts` | 状态栏用量段 + 菜单 icon（左键进底部面板）。 |
 | `src/bottomPanel.ts` | 底部 Panel Webview：额度详情与账号操作菜单。 |
