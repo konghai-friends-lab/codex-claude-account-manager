@@ -62,6 +62,8 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   /** 额度详情面板是否处于前台可见（用于用量条二次点击关闭） */
   private detailsVisible = false;
   private readonly disposables: vscode.Disposable[] = [];
+  /** 等待 webview 首次就绪的回调；resolveWebviewView 到达时一次性放行 */
+  private viewReadyWaiters: Array<() => void> = [];
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -75,6 +77,12 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
     _token: vscode.CancellationToken,
   ): void {
     this.view = webviewView;
+    // 首次解析出来后放行所有在等它的调用（见 waitForView）
+    const waiters = this.viewReadyWaiters;
+    this.viewReadyWaiters = [];
+    for (const w of waiters) {
+      w();
+    }
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
@@ -212,12 +220,36 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
       }
     }
 
+    // .focus 会立刻返回，而 VS Code 是随后才异步调用 resolveWebviewView，
+    // 所以首次打开面板时 this.view 此刻通常还是 undefined。必须等它到位，
+    // 否则首次导入会因为拿不到 view 而被误判成「面板打不开」。
+    await this.waitForView(3000);
+
     if (this.view) {
       this.view.title = title;
       this.view.description = undefined;
       this.view.show?.(true);
       this.view.webview.html = this.renderHtml();
     }
+  }
+
+  /** 等待 webview 首次就绪；已就绪立即返回，超时则放弃 */
+  private waitForView(timeoutMs: number): Promise<void> {
+    if (this.view) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) {
+          return;
+        }
+        done = true;
+        resolve();
+      };
+      this.viewReadyWaiters.push(finish);
+      setTimeout(finish, timeoutMs);
+    });
   }
 
   private renderHtml(): string {
