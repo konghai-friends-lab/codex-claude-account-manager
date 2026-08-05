@@ -1,7 +1,15 @@
 import * as vscode from "vscode";
-import { formatAccountLevel, formatQuotaPercentage, formatQuotaSummary, getQuotaAvailablePercent, getQuotaToneIcon } from "./accountPresentation";
+import {
+  formatAccountLevel,
+  formatGrokCompactSegment,
+  formatGrokQuotaProgress,
+  formatQuotaPercentage,
+  formatQuotaSummary,
+  getQuotaAvailablePercent,
+  getQuotaToneIcon,
+} from "./accountPresentation";
 
-import { AccountProfile, ExternalAuthNotice, QuotaSnapshot, QuotaWindow } from "./types";
+import { AccountProfile, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
 
 
 
@@ -221,6 +229,34 @@ function formatTooltipTitle(account: AccountProfile, showEmail: boolean, nameOve
   return titleBits.join(" · ");
 }
 
+function formatGrokTooltipBlock(snapshot: GrokPeriodSnapshot | undefined): string {
+  const lines: string[] = [];
+  lines.push(`**Grok** · ${formatGrokCompactSegment(snapshot)}  \n`);
+  lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${formatGrokQuotaProgress(snapshot, 8)}  \n`);
+
+  const details: string[] = [];
+  if (snapshot?.window) {
+    const reset = formatReset(snapshot.window);
+    if (reset) {
+      const label = snapshot.periodLabel ? `${snapshot.periodLabel} 重置` : "重置";
+      details.push(`${label} ${reset}`);
+    }
+  }
+  const updatedAt = formatTimestamp(snapshot?.fetchedAt);
+  if (updatedAt) {
+    details.push(`更新 ${updatedAt}`);
+  }
+  if (snapshot?.error && !snapshot.window) {
+    const raw = snapshot.error.trim();
+    const summary = raw.length > 40 ? `${raw.slice(0, 37)}…` : raw;
+    details.push(summary);
+  }
+  if (details.length > 0) {
+    lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${escapeMarkdown(details.join(" · "))}  \n`);
+  }
+  return lines.join("");
+}
+
 function formatTooltipDetailLine(account: AccountProfile): string | undefined {
   const details: string[] = [];
   const primaryReset = formatReset(account.quota?.primary);
@@ -414,6 +450,7 @@ type StatusBarRenderState = {
   refreshing: boolean;
   showEmail: boolean;
   notice: ExternalAuthNotice | undefined;
+  grokSnapshot: GrokPeriodSnapshot | undefined;
 };
 
 
@@ -425,6 +462,7 @@ export class StatusBarController implements vscode.Disposable {
     refreshing: false,
     showEmail: true,
     notice: undefined,
+    grokSnapshot: undefined,
   };
 
   private renderNonce = 0;
@@ -473,6 +511,7 @@ export class StatusBarController implements vscode.Disposable {
     refreshing: boolean,
     showEmail: boolean,
     notice: ExternalAuthNotice | undefined,
+    grokSnapshot?: GrokPeriodSnapshot,
   ): void {
     this.lastRenderState = {
       accounts: [...accounts],
@@ -480,6 +519,7 @@ export class StatusBarController implements vscode.Disposable {
       refreshing,
       showEmail,
       notice,
+      grokSnapshot,
     };
     this.renderInto(this.item);
   }
@@ -524,29 +564,30 @@ export class StatusBarController implements vscode.Disposable {
 
 
   private renderInto(item: vscode.StatusBarItem): void {
-    const { accounts, activeAccountId, refreshing, showEmail, notice } = this.lastRenderState;
+    const { accounts, activeAccountId, refreshing, showEmail, notice, grokSnapshot } = this.lastRenderState;
     const activeAccount = accounts.find((account) => account.id === activeAccountId);
     const invisibleRefreshMarker = this.renderNonce % 2 === 0 ? "\u200B" : "\u200C";
     const noticeText = formatNoticeText(notice);
+    const grokSegment = formatGrokCompactSegment(grokSnapshot);
 
     if (noticeText) {
       item.text = `${getNoticeIcon(notice)} ${noticeText}${invisibleRefreshMarker}`;
-      item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice);
+      item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot);
       return;
     }
 
     const leadingIcon = getLeadingIcon(activeAccount, refreshing);
 
     if (!activeAccount) {
-      item.text = `${leadingIcon} Codex 未登录${invisibleRefreshMarker}`;
-      item.tooltip = this.buildTooltip(accounts, undefined, showEmail, notice);
+      // Codex 未登录时仍保留 Grok peer 段（R1/R5）
+      item.text = `${leadingIcon} Codex 未登录 · ${grokSegment}${invisibleRefreshMarker}`;
+      item.tooltip = this.buildTooltip(accounts, undefined, showEmail, notice, grokSnapshot);
       return;
     }
 
+    item.text = `${leadingIcon} ${formatStatusBarAccountName(activeAccount.name)} · ${formatCompactQuota(activeAccount.quota)} · ${grokSegment}${invisibleRefreshMarker}`;
 
-    item.text = `${leadingIcon} ${formatStatusBarAccountName(activeAccount.name)} · ${formatCompactQuota(activeAccount.quota)}${invisibleRefreshMarker}`;
-
-    item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice);
+    item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot);
   }
 
 
@@ -560,6 +601,7 @@ export class StatusBarController implements vscode.Disposable {
     activeAccountId: string | undefined,
     showEmail: boolean,
     notice: ExternalAuthNotice | undefined,
+    grokSnapshot?: GrokPeriodSnapshot,
   ): vscode.MarkdownString {
     const tooltip = new vscode.MarkdownString(undefined, true);
     tooltip.supportHtml = true;
@@ -590,6 +632,9 @@ export class StatusBarController implements vscode.Disposable {
       ],
     };
 
+    tooltip.appendMarkdown("**额度一览**\n\n");
+    tooltip.appendMarkdown(formatGrokTooltipBlock(grokSnapshot));
+    tooltip.appendMarkdown("\n---\n\n");
     tooltip.appendMarkdown("**Codex 账号列表**\n\n");
 
     if (notice) {

@@ -1,4 +1,4 @@
-import { AccountProfile, QuotaSnapshot, QuotaWindow } from "./types";
+import { AccountProfile, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
 
 export type QuotaTone = "good" | "warning" | "low" | "critical" | "unknown";
 export type AutoSwitchPriority = "lowest-window-first" | "primary-first" | "secondary-first";
@@ -154,6 +154,45 @@ export function formatQuotaPercentage(window: QuotaWindow | undefined): string {
 
 export function formatQuotaBadge(label: string, window: QuotaWindow | undefined): string {
   return `${label} ${getQuotaToneIcon(window)} ${formatQuotaPercentage(window)}`;
+}
+
+/** 状态栏 Grok 占位：始终带 Grok 标记 */
+export function formatGrokPlaceholder(reason?: string): string {
+  const detail = reason?.trim();
+  if (!detail) {
+    return "Grok —";
+  }
+  // 状态栏保持短；常见未登录单独压缩
+  if (/未登录|no login|not logged/i.test(detail)) {
+    return "Grok 未登录";
+  }
+  return "Grok —";
+}
+
+/** 状态栏紧凑 Grok 段：`Grok 7d 🟩51%` 或占位 */
+export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefined): string {
+  if (!snapshot) {
+    return formatGrokPlaceholder("暂无数据");
+  }
+  if (!snapshot.window || snapshot.error) {
+    return formatGrokPlaceholder(snapshot.error);
+  }
+
+  const label = snapshot.periodLabel?.trim();
+  const percentage = formatQuotaPercentage(snapshot.window).replace(/\.0%$/, "%");
+  const icon = getQuotaToneIcon(snapshot.window);
+  return label
+    ? `Grok ${label} ${icon}${percentage}`
+    : `Grok ${icon}${percentage}`;
+}
+
+/** 悬停用 Grok 额度行（进度条风格，与 Codex 一致） */
+export function formatGrokQuotaProgress(snapshot: GrokPeriodSnapshot | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {
+  if (!snapshot?.window || snapshot.error) {
+    return `Grok ${snapshot?.error?.trim() ? "暂不可用" : "暂不可用"}`;
+  }
+  const label = snapshot.periodLabel ? `Grok ${snapshot.periodLabel}` : "Grok";
+  return formatQuotaProgress(label, snapshot.window, barLength);
 }
 
 export function formatQuotaProgress(label: string, window: QuotaWindow | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {

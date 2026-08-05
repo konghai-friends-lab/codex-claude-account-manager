@@ -17,7 +17,9 @@ Secret Storage，刷新额度，并将所选账号写回 Codex 本地的 `auth.j
 | `src/manager.ts` | 核心编排：命令、账号切换、刷新循环、自动切号与用户提示。 |
 | `src/store.ts` | 账号元数据写入 `globalState`，凭据写入 `SecretStorage`。 |
 | `src/auth.ts` | 多平台 Codex 路径解析、安全解析与原子写入 `auth.json`。 |
-| `src/quotaClient.ts` | 额度请求及响应头解析。 |
+| `src/quotaClient.ts` | Codex 额度请求及响应头解析。 |
+| `src/grokAuth.ts` | 本机 Grok `auth.json` 只读解析（不写回、不进 SecretStorage）。 |
+| `src/grokQuotaClient.ts` | Grok Build 周期剩余（billing credits）请求与解析。 |
 | `src/tokenRecovery.ts` | refresh token 刷新流程及认证数据标准化。 |
 | `src/statusBar.ts` | 状态栏项目与 Markdown 悬停提示渲染。 |
 | `src/accountPresentation.ts` | 纯额度计算、排序与展示辅助函数。 |
@@ -88,3 +90,9 @@ npm run compile
 - 不能假定当前已登录账号可以安全覆盖；导入或切换前须对账并提示用户。
 - 不能因网络可用就假定额度请求或令牌刷新会成功。
 - 自动切号可能中断正在进行的 Codex 会话；必须保留空闲保护与手动切换优先级。
+
+## 已记录的解决方案与术语
+
+- `docs/solutions/` 保存已解决问题的学习文档，按类别组织，并使用 YAML frontmatter
+  标注 `module`、`tags` 与 `problem_type`；在涉及已有模块的实现、调试或决策时可先检索。
+- `CONCEPTS.md` 记录项目共享领域术语，适用于熟悉代码库或讨论领域概念时查阅。

@@ -17,11 +17,13 @@ import {
 import { AccountHealthCheck, evaluateAccountHealth, renderAccountHealthMarkdown } from "./accountHealth";
 import { clearCodexAuthFile, getDefaultCodexAuthPath, getDefaultCodexSessionsPath, loadAuthDataFromFile, syncCodexAuthFile } from "./auth";
 
+import { loadGrokAuthFromFile } from "./grokAuth";
+import { GrokQuotaClient } from "./grokQuotaClient";
 import { CodexQuotaClient } from "./quotaClient";
 import { StatusBarController } from "./statusBar";
 import { AccountStore } from "./store";
 import { CodexTokenRecoveryClient, shouldAttemptTokenRecovery, isSessionRevokedError, isTokenExpiredAndUnrecoverableError, isUnrecoverableAuthError } from "./tokenRecovery";
-import { AccountProfile, AuthData, ExportedAccountItem, ExternalAuthNotice, QuotaSnapshot } from "./types";
+import { AccountProfile, AuthData, ExportedAccountItem, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot } from "./types";
 
 
 
@@ -128,6 +130,8 @@ export class CodexAccountManager implements vscode.Disposable {
   private refreshing = false;
   private externalAuthNotice: ExternalAuthNotice | undefined;
   private lastDetectedExternalAuthFingerprint: string | undefined;
+  /** 本机当前 Grok 登录的周期剩余快照（与 Codex 账号 store 分离） */
+  private grokSnapshot: GrokPeriodSnapshot | undefined;
   /** 每次手动切号时递增，供 maybeAutoSwitchLowQuotaAccount 检测是否被抢先 */
   private manualSwitchGeneration = 0;
   private readonly authPath = getDefaultCodexAuthPath();
@@ -480,7 +484,37 @@ export class CodexAccountManager implements vscode.Disposable {
 
   private async refreshStatusBar(): Promise<void> {
     const { accounts, activeAccountId } = await this.loadAccountContext();
-    this.statusBar.update(accounts, activeAccountId, this.refreshing, this.showEmailInTooltip, this.externalAuthNotice);
+    this.statusBar.update(
+      accounts,
+      activeAccountId,
+      this.refreshing,
+      this.showEmailInTooltip,
+      this.externalAuthNotice,
+      this.grokSnapshot,
+    );
+  }
+
+  /** 刷新本机 Grok 周期剩余；失败只写占位快照，不抛错、不打断 Codex 流程 */
+  private async refreshGrokPeriodRemaining(): Promise<void> {
+    const fetchedAt = new Date().toISOString();
+    const auth = loadGrokAuthFromFile();
+    if (!auth) {
+      this.grokSnapshot = {
+        fetchedAt,
+        error: "未登录",
+      };
+      return;
+    }
+
+    try {
+      const client = new GrokQuotaClient(auth, this.requestTimeoutMs);
+      this.grokSnapshot = await client.fetchPeriodRemaining();
+    } catch (error) {
+      this.grokSnapshot = {
+        fetchedAt,
+        error: error instanceof Error ? error.message : "刷新 Grok 周期额度失败",
+      };
+    }
   }
 
 
@@ -2170,8 +2204,13 @@ export class CodexAccountManager implements vscode.Disposable {
     await this.refreshStatusBar();
 
     try {
+      // Grok 与 Codex 并行刷新：Grok 失败不影响 Codex，也不参与 auto-switch
+      const grokRefresh = this.refreshGrokPeriodRemaining();
+
       const accounts = await this.store.listAccounts();
       if (accounts.length === 0) {
+        await grokRefresh;
+        await this.refreshStatusBar();
         if (!silent) {
           void vscode.window.showInformationMessage("还没有可刷新的账号，先导入一个吧。");
         }
@@ -2192,6 +2231,8 @@ export class CodexAccountManager implements vscode.Disposable {
           results.push({ status: "rejected", reason: e });
         }
       }
+
+      await grokRefresh;
 
       // 刷新额度完成后顺带同步当前激活账号的 planType：
       // 用户在 OpenAI 后台升级套餐后，auth.json 里的 chatgpt_plan_type 已更新，

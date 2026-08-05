@@ -31,6 +31,20 @@ export interface QuotaSnapshot {
   error?: string;
 }
 
+/** 本机当前 Grok 登录的周期剩余快照（与 Codex multi-account quota 分离） */
+export interface GrokPeriodSnapshot {
+  /** 有真实周期数据时的窗口；不可用时省略 */
+  window?: QuotaWindow;
+  /** 周期标签，如 7d / 30d；未知时省略 */
+  periodLabel?: string;
+  /** 产品标识，如 GrokBuild */
+  product?: string;
+  fetchedAt: string;
+  statusCode?: number;
+  /** 不可用原因（未登录 / 解析失败 / 网络错误等），供占位展示 */
+  error?: string;
+}
+
 export interface TokenHealthSnapshot {
   hasRefreshToken: boolean;
   lastRecoveryAttemptAt?: string;

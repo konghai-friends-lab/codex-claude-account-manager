@@ -1,9 +1,9 @@
-# Codex Account Manager
+# Konghai Codex & Claude Code Account Manager
 
 一个基于 VS Code 的 Codex 多账号管理插件，目标是把下面几件事放到一个状态栏里完成：
 
 - 管理多个 Codex 账号
-- 每 5 分钟自动刷新每个账号的 5 小时 / 7 天额度
+- 每 5 分钟自动刷新每个账号可用的 5 小时 / 7 天额度
 - 手动切换当前账号时，同步覆盖官方 `Codex - OpenAI's coding agent` 扩展正在使用的 `auth.json`
 - 状态栏常驻显示当前账号、账号级别和当前 5 小时可用额度
 - 鼠标悬停状态栏时，直接看到所有账号列表，以及带颜色进度条的 5 小时 / 7 天可用额度
@@ -35,10 +35,7 @@
 
 ### 2. 额度自动刷新
 
-插件会定时向 Codex 接口发起极小请求，并从响应头中解析两个窗口：
-
-- `x-codex-primary-*` -> 5 小时窗口
-- `x-codex-secondary-*` -> 7 天窗口
+插件会定时请求 Codex 额度数据，并按接口返回的窗口时长识别 5 小时和 7 天额度。
 
 当前实现展示的是 **剩余额度百分比**，也就是：
 
@@ -67,18 +64,20 @@
 
 如果你不想自动切号，直接把阈值设成 `0` 就行。
 
-> 说明：官方接口头信息稳定暴露的是百分比，而不是绝对次数，因此这里的“可用额度”按“剩余百分比”展示。
+> 说明：可用额度按剩余百分比展示。Codex 接口偶尔只返回其中一个窗口；此时插件会明确显示“暂不可用”，不会猜测或伪造另一个窗口的数据。
 
 
 ### 3. 状态栏与悬停列表
 
-状态栏格式现在会显示：
+状态栏格式现在会显示 **Codex 与 Grok 对等段**：
 
 ```text
-账号简称 · 🟩82.4%
+账号简称 · 5h 🟩82% · Grok 7d 🟨51%
 ```
 
-状态栏现在只保留“账号简称 + 颜色额度”，账号级别和完整信息都留在悬停里，右下角终于没那么容易横向发福了。
+若本机未登录 Grok 或拉不到周期剩余，Grok 段会显示占位（如 `Grok 未登录` / `Grok —`），不会静默消失。悬停提示顶部有 Grok 额度块（剩余、重置倒计时、更新时间），下方仍是 Codex 多账号列表。
+
+状态栏主文案尽量短；账号级别和完整 Codex 信息留在悬停里。
 
 如果账号名称里带空格、斜杠、连字符之类的分隔符，会优先取前面的简称；如果简称本身还太长，再自动省略一截。
 
@@ -189,15 +188,9 @@
 "codexAccountManager.restartExtensionHostAfterSwitch": false
 ```
 
-如果你希望切换后进一步强制刷新整个 VS Code 窗口，也可以开启：
-
-```json
-"codexAccountManager.reloadWindowAfterSwitch": true
-```
-
 另外，**自动切号**和**手动切号**现在是分开处理的：
 
-- 手动切号：仍然会按你的配置决定是否重启扩展宿主 / 重载窗口，让官方 Codex 扩展尽快切到新账号
+- 手动切号：会按你的配置决定是否重启扩展宿主，让官方 Codex 扩展尽快切到新账号
 - 自动切号：默认会先看 `~/.codex/sessions`（Windows + WSL 会自动解析到对应 WSL 路径）最近有没有会话写入；如果判断 Codex 还在忙，就先不切，等空闲达到设定秒数后、下次刷新再切
 - 切回上一个账号：扩展会记住你刚切走的那个账号，适合两个账号来回切；如果上一个账号已经被删除或不存在，会直接提示你改为手动选择
 
@@ -228,7 +221,6 @@
 {
   "codexAccountManager.refreshIntervalMinutes": 5,
   "codexAccountManager.restartExtensionHostAfterSwitch": true,
-  "codexAccountManager.reloadWindowAfterSwitch": false,
   "codexAccountManager.showEmailInTooltip": true,
 
   "codexAccountManager.requestTimeoutSeconds": 20,
@@ -242,7 +234,6 @@
 其中：
 
 - `restartExtensionHostAfterSwitch`：切换到另一个账号后默认自动重启扩展宿主，让官方 Codex 扩展立即重新读取新 `auth.json`
-- `reloadWindowAfterSwitch`：如果你想更激进一点，也可以在切号后直接重载整个 VS Code 窗口
 - `autoSwitchThresholdPercent`：低于这个百分比时触发自动切号，`0` 表示关闭
 - `autoSwitchPriority`：候选账号排序策略，可选
   - `lowest-window-first`：最低窗口优先
@@ -275,6 +266,14 @@ npm run compile
 2. 增加测试覆盖（尤其是 auth 解析、额度头解析、账号去重逻辑）
 3. 支持更细粒度的导出策略（比如不带令牌的只读清单）
 4. 给快速修复流程补上更细的定向动作（比如只修当前账号、自动聚焦失败原因最重的账号）
+
+## 许可证
+
+[MIT](LICENSE.txt)
+
+## 免责声明
+
+本项目是独立的社区扩展，与 OpenAI 或 Visual Studio Code 团队无隶属关系。Codex 的认证与额度接口可能随上游变化；使用多账号、导入导出或切换账号前，请自行确认符合适用的服务条款。
 
 
 
