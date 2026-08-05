@@ -133,10 +133,14 @@ function readFromFile(credentialsPath: string): string | null {
 export async function loadClaudeAuth(
   credentialsPath = getDefaultClaudeCredentialsPath(),
   nowMs = Date.now(),
+  options: { useKeychain?: boolean } = {},
 ): Promise<ClaudeAuthData | null> {
   let raw: string | null = null;
 
-  if (process.platform === "darwin") {
+  // useKeychain 可显式关掉，便于在 macOS 上单测文件回退路径本身；
+  // 生产调用不传该参数，行为与之前完全一致。
+  const useKeychain = options.useKeychain ?? process.platform === "darwin";
+  if (useKeychain) {
     raw = await readFromKeychain();
   }
   if (!raw) {

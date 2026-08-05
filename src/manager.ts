@@ -2268,8 +2268,8 @@ export class CodexAccountManager implements vscode.Disposable {
 
       const accounts = await this.store.listAccounts();
       if (accounts.length === 0) {
-        await grokRefresh;
-        await claudeRefresh;
+        // allSettled：任一侧刷新 reject 都不能中断 Codex 主流程
+        await Promise.allSettled([grokRefresh, claudeRefresh]);
         if (!silent) {
           void vscode.window.showInformationMessage("还没有可刷新的账号，先导入一个吧。");
         }
@@ -2291,8 +2291,10 @@ export class CodexAccountManager implements vscode.Disposable {
         }
       }
 
-      await grokRefresh;
-      await claudeRefresh;
+      // 必须用 allSettled：若这里直接 await 而 Grok/CC 侧 reject，
+      // try 会就地中断，下面的 planType 同步与自动切号整轮被跳过
+      // ——用户停在快耗尽的账号上却不会被切走，且没有任何提示。
+      await Promise.allSettled([grokRefresh, claudeRefresh]);
 
       // 刷新额度完成后顺带同步当前激活账号的 planType：
       // 用户在 OpenAI 后台升级套餐后，auth.json 里的 chatgpt_plan_type 已更新，

@@ -7,6 +7,7 @@ const {
   formatClaudePlaceholder,
   formatClaudeQuotaProgress,
   getClaudeResetAfterSeconds,
+  truncateErrorSummary,
   formatCodexCompactSegment,
   formatCompactProgressChip,
   formatGrokCompactProgressChip,
@@ -135,6 +136,21 @@ test("formatClaudeCompactSegment 无数据 / 错误时走占位", () => {
   );
 });
 
+test("truncateErrorSummary 抹掉尖括号，防止注入 supportHtml tooltip", () => {
+  // tooltip 用 supportHtml=true + isTrusted，而 escapeMarkdown 不转义 '<'。
+  // 第三方响应体里的标签必须在进入展示层前就被消掉。
+  const out = truncateErrorSummary("<img src=x onerror=alert(1)>", 200);
+  assert.doesNotMatch(out, /</);
+  assert.doesNotMatch(out, />/);
+});
+
+test("truncateErrorSummary 仍按长度截断", () => {
+  assert.equal(truncateErrorSummary("x".repeat(100)), "x".repeat(37) + "…");
+  assert.equal(truncateErrorSummary("  短  "), "短");
+  assert.equal(truncateErrorSummary(undefined), undefined);
+  assert.equal(truncateErrorSummary("   "), undefined);
+});
+
 test("formatClaudePlaceholder 常见失败短后缀", () => {
   assert.equal(formatClaudePlaceholder("未登录"), "CC 未登录");
   assert.equal(formatClaudePlaceholder("Claude usage HTTP 401"), "CC 鉴权失败");
@@ -163,6 +179,29 @@ test("getClaudeResetAfterSeconds 按当前时间现算，不冻结", () => {
   const a = getClaudeResetAfterSeconds(CC_SNAPSHOT, "sevenDay", t1);
   const b = getClaudeResetAfterSeconds(CC_SNAPSHOT, "sevenDay", t2);
   assert.equal(a - b, 3600);
+});
+
+test("formatClaudeCompactProgressChip 7d 缺失时不拿 5h 顶替", () => {
+  // 守护 R4：状态栏那格代表 7d。若将来有人"贴心地"在 7d 缺失时回退到 5h，
+  // 用户会把 5 小时的余量当成一周的余量来安排工作。
+  const only5h = {
+    fiveHour: { usedPercent: 7, availablePercent: 93 },
+    fetchedAt: "x",
+    error: "部分用量窗口不可用",
+  };
+  assert.equal(formatClaudeCompactProgressChip(only5h), "⬜—");
+  assert.doesNotMatch(formatClaudeCompactProgressChip(only5h), /93%/);
+});
+
+test("getClaudeResetAfterSeconds 两个窗口都必须现算", () => {
+  // 此前只测了 sevenDay；which 是三元分支，fiveHour 是另一条未覆盖路径
+  const t1 = Date.parse("2026-08-05T00:00:00.000Z");
+  const t2 = t1 + 3600_000;
+  for (const which of ["fiveHour", "sevenDay"]) {
+    const a = getClaudeResetAfterSeconds(CC_SNAPSHOT, which, t1);
+    const b = getClaudeResetAfterSeconds(CC_SNAPSHOT, which, t2);
+    assert.equal(a - b, 3600, `${which} 倒计时必须现算`);
+  }
 });
 
 test("getClaudeResetAfterSeconds 无绝对时间时回退冻结秒数", () => {
@@ -204,9 +243,10 @@ test("状态栏极简行：CC · Codex · Grok，仅 7d，无标题", () => {
       periodLabel: "7d",
       fetchedAt: "2026-08-05T00:00:00.000Z",
     },
+    { claudeSnapshot: undefined },
   );
   // 顺序 CC · Codex(7d=77) · Grok；不用 5h=10
-  // 未传 CC 快照时首段仍为占位
+  // CC 快照为 undefined 时首段仍为占位
   assert.equal(line, "⬜— · 🟩77% · 🟨44%");
   assert.doesNotMatch(line, /codex|CC|Grok|5h|10%/i);
 });
@@ -245,7 +285,10 @@ test("状态栏极简行：CC 快照必须经 options 传入才生效", () => {
   });
   assert.match(withCC, /^🟩97%/, "传入 CC 快照时首段必须是真实数据");
 
-  const withoutCC = formatStatusBarQuotaLine(codex, undefined, { codexUnavailable: false });
+  const withoutCC = formatStatusBarQuotaLine(codex, undefined, {
+    codexUnavailable: false,
+    claudeSnapshot: undefined,
+  });
   assert.match(withoutCC, /^⬜—/, "未传 CC 快照时首段才是占位");
 });
 

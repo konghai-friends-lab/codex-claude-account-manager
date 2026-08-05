@@ -248,14 +248,19 @@ export class ClaudeQuotaClient {
         if (statusCode >= 400) {
           let errBody = "";
           response.on("data", (chunk: string) => {
+            // 在追加后截断：只判断追加前的长度，
+            // 单个超大 chunk 仍会被整块接进来
             if (errBody.length < MAX_ERROR_BODY_BYTES) {
-              errBody += chunk;
+              errBody = (errBody + chunk).slice(0, MAX_ERROR_BODY_BYTES);
             }
           });
           const rejectHttp = (): void => {
             finish(() => {
-              // 不把完整 body 塞进错误（可能含敏感信息）；只附极短摘要
-              const snippet = errBody.replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_SNIPPET_CHARS);
+              // 不把完整 body 塞进错误（可能含敏感信息）；只附极短摘要。
+              // 同时抹掉尖括号：该摘要最终会进入 supportHtml=true 的
+              // tooltip，而 escapeMarkdown 不转义 '<'，第三方响应体里的
+              // 标签会被当作实时标记渲染。
+              const snippet = errBody.replace(/[<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_SNIPPET_CHARS);
               reject(new ClaudeUsageHttpError(statusCode, snippet || undefined));
             });
           };
@@ -276,8 +281,10 @@ export class ClaudeQuotaClient {
           body += chunk;
           if (body.length > MAX_RESPONSE_BODY_BYTES) {
             oversized = true;
+            // destroy 放在 finish 外：若其它路径已先 settle，
+            // 放在回调里会被 settled 守卫跳过，socket 就泄漏了
+            request.destroy();
             finish(() => {
-              request.destroy();
               reject(new Error("Claude usage 响应过大"));
             });
           }
@@ -294,8 +301,9 @@ export class ClaudeQuotaClient {
       });
 
       request.setTimeout(this.timeoutMs, () => {
+        // 同上：拆掉超时也必须真正销毁请求
+        request.destroy();
         finish(() => {
-          request.destroy();
           reject(new Error(`Claude usage 请求超时（${this.timeoutMs}ms）`));
         });
       });

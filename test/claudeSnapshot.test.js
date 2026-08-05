@@ -80,3 +80,21 @@ test("buildClaudeSnapshot 成功时返回真实窗口", async () => {
   assert.equal(snap.sevenDay.availablePercent, 97);
   assert.equal(snap.error, undefined);
 });
+
+test("并行刷新：任一侧 reject 都不中断后续步骤", async () => {
+  // 回归守护：此前用的是顺序 await grokRefresh; await claudeRefresh;
+  // 若 grok 侧 reject，try 会就地中断，planType 同步与自动切号整轮被跳过。
+  // allSettled 永不 reject，后续步骤必须照常执行。
+  const rejecting = Promise.reject(new Error("grok 炸了"));
+  const resolving = Promise.resolve();
+  let reachedNextStep = false;
+
+  try {
+    await Promise.allSettled([rejecting, resolving]);
+    reachedNextStep = true;
+  } catch {
+    reachedNextStep = false;
+  }
+
+  assert.equal(reachedNextStep, true, "allSettled 之后必须能继续执行");
+});

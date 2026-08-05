@@ -196,7 +196,9 @@ export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefine
  * 这些字符串来自外部接口响应，不设上限会挤爆 tooltip 与面板行。
  */
 export function truncateErrorSummary(raw: string | undefined, max = 40): string | undefined {
-  const trimmed = raw?.trim();
+  // 先抹尖括号：这些字符串最终会进入 supportHtml=true 的 tooltip，
+  // 而那里的 escapeMarkdown 不转义 '<'，标签会被当成实时标记渲染。
+  const trimmed = raw?.replace(/[<>]/g, " ").replace(/\s+/g, " ").trim();
   if (!trimmed) {
     return undefined;
   }
@@ -336,12 +338,14 @@ export function formatGrokCompactProgressChip(
 export function formatStatusBarQuotaLine(
   quota: QuotaSnapshot | undefined,
   grokSnapshot: GrokPeriodSnapshot | undefined,
-  options?: { codexUnavailable?: boolean; claudeSnapshot?: ClaudeUsageSnapshot },
+  // claudeSnapshot 必填（可为 undefined）：设成可选会让漏传通过类型检查，
+  // 这正是状态栏 CC 段曾永久显示占位的原因。必填则漏传即编译错误。
+  options: { codexUnavailable?: boolean; claudeSnapshot: ClaudeUsageSnapshot | undefined },
 ): string {
   // CC 只反映 7d，与 Codex 处理一致，保持状态栏三段
-  const ccChip = formatClaudeCompactProgressChip(options?.claudeSnapshot);
+  const ccChip = formatClaudeCompactProgressChip(options.claudeSnapshot);
   // Codex 固定用 secondary（7d），不再混显 5h
-  const codexUnavailable = Boolean(options?.codexUnavailable) || !quota?.secondary;
+  const codexUnavailable = Boolean(options.codexUnavailable) || !quota?.secondary;
   const codexChip = formatCompactProgressChip(quota?.secondary, codexUnavailable);
   const grokChip = formatGrokCompactProgressChip(grokSnapshot);
   return `${ccChip} · ${codexChip} · ${grokChip}`;
