@@ -1,15 +1,31 @@
 {
-  "name": "codex-account-manager",
-  "displayName": "Codex Account Manager",
+  "name": "codex-claude-account-manager",
+  "displayName": "Konghai Codex & Claude Code Account Manager",
   "description": "管理多个 Codex 账号、自动刷新 5 小时/7 天可用额度，并同步切换官方 Codex 扩展账号",
-  "version": "0.0.70",
-  "publisher": "raozhiven",
+  "version": "0.0.81",
+  "publisher": "konghai",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/konghai-friends-lab/codex-claude-account-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/konghai-friends-lab/codex-claude-account-manager/issues"
+  },
+  "homepage": "https://github.com/konghai-friends-lab/codex-claude-account-manager#readme",
   "engines": {
     "vscode": "^1.95.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "codex",
+    "openai",
+    "account manager",
+    "multi account",
+    "quota",
+    "usage limits"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -21,6 +37,10 @@
       {
         "command": "codexAccountManager.manageAccounts",
         "title": "Codex 账号：管理账号"
+      },
+      {
+        "command": "codexAccountManager.showQuotaDetails",
+        "title": "Codex 账号：查看额度详情"
       },
       {
         "command": "codexAccountManager.importCurrentAuth",
@@ -95,47 +115,27 @@
         "title": "Codex 账号：激活指定账号"
       }
     ],
-    "menus": {
-      "statusBar/item/context": [
+    "viewsContainers": {
+      "panel": [
         {
-          "command": "codexAccountManager.manageAccounts",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "navigation"
-        },
+          "id": "codexAccountManager",
+          "title": "Agent 用量",
+          "icon": "$(account)"
+        }
+      ]
+    },
+    "views": {
+      "codexAccountManager": [
         {
-          "command": "codexAccountManager.refreshQuotas",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
-        },
-        {
-          "command": "codexAccountManager.openCurrentAuthPath",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
-        },
-        {
-          "command": "codexAccountManager.loginNewAccount",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
-        },
-        {
-          "command": "codexAccountManager.switchToLastAccount",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
-        },
-        {
-          "command": "codexAccountManager.showAccountHealth",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
-        },
-        {
-          "command": "codexAccountManager.quickFixAccountHealth",
-          "when": "statusBarItemId == codex-account-manager.status",
-          "group": "2_actions"
+          "type": "webview",
+          "id": "codexAccountManager.panel",
+          "name": "Agent 用量",
+          "visibility": "visible"
         }
       ]
     },
     "configuration": {
-      "title": "Codex Account Manager",
+      "title": "Konghai Codex & Claude Code Account Manager",
       "properties": {
         "codexAccountManager.refreshIntervalMinutes": {
           "type": "number",
@@ -235,7 +235,11 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "test": "npm run compile && node --test test/*.test.js",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "version:current": "node scripts/version.mjs current",
+    "version:bump": "node scripts/version.mjs bump",
+    "vsix": "node scripts/version.mjs package",
+    "release": "node scripts/version.mjs release"
   },
   "devDependencies": {
     "@types/node": "^20.16.11",

@@ -1,4 +1,4 @@
-import { AccountProfile, QuotaSnapshot, QuotaWindow } from "./types";
+import { AccountProfile, ClaudeUsageSnapshot, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
 
 export type QuotaTone = "good" | "warning" | "low" | "critical" | "unknown";
 export type AutoSwitchPriority = "lowest-window-first" | "primary-first" | "secondary-first";
@@ -154,6 +154,248 @@ export function formatQuotaPercentage(window: QuotaWindow | undefined): string {
 
 export function formatQuotaBadge(label: string, window: QuotaWindow | undefined): string {
   return `${label} ${getQuotaToneIcon(window)} ${formatQuotaPercentage(window)}`;
+}
+
+/** 状态栏 Grok 占位：始终带 Grok 标记；常见失败用短后缀 */
+export function formatGrokPlaceholder(reason?: string): string {
+  const detail = reason?.trim();
+  if (!detail) {
+    return "Grok —";
+  }
+  if (/未登录|no login|not logged/i.test(detail)) {
+    return "Grok 未登录";
+  }
+  if (/HTTP 401|HTTP 403|鉴权|unauthorized/i.test(detail)) {
+    return "Grok 鉴权失败";
+  }
+  if (/超时|timeout/i.test(detail)) {
+    return "Grok 超时";
+  }
+  return "Grok —";
+}
+
+/** 状态栏紧凑 Grok 段：`Grok 7d 🟩51%` 或占位 */
+export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefined): string {
+  if (!snapshot) {
+    return formatGrokPlaceholder("暂无数据");
+  }
+  if (!snapshot.window || snapshot.error) {
+    return formatGrokPlaceholder(snapshot.error);
+  }
+
+  const label = snapshot.periodLabel?.trim();
+  const percentage = formatQuotaPercentage(snapshot.window).replace(/\.0%$/, "%");
+  const icon = getQuotaToneIcon(snapshot.window);
+  return label
+    ? `Grok ${label} ${icon}${percentage}`
+    : `Grok ${icon}${percentage}`;
+}
+
+/**
+ * 错误摘要截断：展示层统一到 40 字符。
+ * 这些字符串来自外部接口响应，不设上限会挤爆 tooltip 与面板行。
+ */
+export function truncateErrorSummary(raw: string | undefined, max = 40): string | undefined {
+  // 先抹尖括号：这些字符串最终会进入 supportHtml=true 的 tooltip，
+  // 而那里的 escapeMarkdown 不转义 '<'，标签会被当成实时标记渲染。
+  const trimmed = raw?.replace(/[<>]/g, " ").replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > max ? `${trimmed.slice(0, max - 3)}…` : trimmed;
+}
+
+/** 状态栏 CC 占位：始终带 CC 标记；常见失败用短后缀 */
+export function formatClaudePlaceholder(reason?: string): string {
+  const detail = reason?.trim();
+  if (!detail) {
+    return "CC —";
+  }
+  if (/未登录|no login|not logged/i.test(detail)) {
+    return "CC 未登录";
+  }
+  if (/HTTP 401|HTTP 403|鉴权|unauthorized/i.test(detail)) {
+    return "CC 鉴权失败";
+  }
+  if (/超时|timeout/i.test(detail)) {
+    return "CC 超时";
+  }
+  return "CC —";
+}
+
+/**
+ * 详情面板 / tooltip 的 CC 紧凑段：`CC 5h 🟩93% · CC 7d 🟩97%`。
+ * 单个窗口缺失时该段显示「暂不可用」，绝不画成 0%。
+ */
+export function formatClaudeCompactSegment(snapshot: ClaudeUsageSnapshot | undefined): string {
+  if (!snapshot) {
+    return formatClaudePlaceholder("暂无数据");
+  }
+  if (!snapshot.fiveHour && !snapshot.sevenDay) {
+    return formatClaudePlaceholder(snapshot.error);
+  }
+
+  const parts: string[] = [];
+  for (const [label, window] of [
+    ["5h", snapshot.fiveHour],
+    ["7d", snapshot.sevenDay],
+  ] as const) {
+    if (!window) {
+      parts.push(`CC ${label} 暂不可用`);
+      continue;
+    }
+    const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+    parts.push(`CC ${label} ${getQuotaToneIcon(window)}${percentage}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * CC 状态栏极简芯片（无 “CC/7d” 前缀）。
+ * 只反映 7d 窗口：状态栏保持三段，与 Codex 的处理一致。
+ */
+export function formatClaudeCompactProgressChip(
+  snapshot: ClaudeUsageSnapshot | undefined,
+): string {
+  if (!snapshot?.sevenDay) {
+    return formatCompactProgressChip(undefined, true);
+  }
+  return formatCompactProgressChip(snapshot.sevenDay);
+}
+
+/**
+ * 从 CC 快照现算某个窗口的重置剩余秒数。
+ * 优先绝对时间字段，避免使用抓取时冻结的 resetAfterSeconds。
+ */
+export function getClaudeResetAfterSeconds(
+  snapshot: ClaudeUsageSnapshot | undefined,
+  which: "fiveHour" | "sevenDay",
+  nowMs = Date.now(),
+): number | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  const resetAt = which === "fiveHour" ? snapshot.fiveHourResetAt : snapshot.sevenDayResetAt;
+  if (resetAt) {
+    const endMs = Date.parse(resetAt);
+    if (Number.isFinite(endMs)) {
+      return Math.max(0, Math.round((endMs - nowMs) / 1000));
+    }
+  }
+  const window = which === "fiveHour" ? snapshot.fiveHour : snapshot.sevenDay;
+  if (window?.resetAfterSeconds !== undefined) {
+    return Math.max(0, window.resetAfterSeconds);
+  }
+  return undefined;
+}
+
+/** 悬停用 CC 额度行（进度条风格，与 Codex / Grok 一致） */
+export function formatClaudeQuotaProgress(
+  snapshot: ClaudeUsageSnapshot | undefined,
+  which: "fiveHour" | "sevenDay",
+  barLength = DEFAULT_QUOTA_BAR_LENGTH,
+): string {
+  const window = which === "fiveHour" ? snapshot?.fiveHour : snapshot?.sevenDay;
+  const label = which === "fiveHour" ? "CC 5h" : "CC 7d";
+  if (!window) {
+    return `${label} 暂不可用`;
+  }
+  return formatQuotaProgress(label, window, barLength);
+}
+
+/**
+ * 状态栏极简进度芯片：色块 + 百分比，无产品名/窗口标签。
+ * 例：`🟩77%` / `⬜—`
+ */
+export function formatCompactProgressChip(
+  window: QuotaWindow | undefined,
+  unavailable = false,
+): string {
+  if (unavailable || !window) {
+    return `${getQuotaToneIcon(undefined)}—`;
+  }
+  const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+  return `${getQuotaToneIcon(window)}${percentage}`;
+}
+
+/**
+ * Grok 状态栏极简芯片（无 “Grok/7d” 前缀）。
+ * 有数据：`🟨44%`；不可用：`⬜—`
+ */
+export function formatGrokCompactProgressChip(
+  snapshot: GrokPeriodSnapshot | undefined,
+): string {
+  if (!snapshot?.window || snapshot.error) {
+    return formatCompactProgressChip(undefined, true);
+  }
+  return formatCompactProgressChip(snapshot.window);
+}
+
+/**
+ * 状态栏多产品极简行（仅 7d，顺序 CC · Codex · Grok，无标题）。
+ * 例：`⬜— · 🟩77% · 🟨44%`
+ */
+export function formatStatusBarQuotaLine(
+  quota: QuotaSnapshot | undefined,
+  grokSnapshot: GrokPeriodSnapshot | undefined,
+  // claudeSnapshot 必填（可为 undefined）：设成可选会让漏传通过类型检查，
+  // 这正是状态栏 CC 段曾永久显示占位的原因。必填则漏传即编译错误。
+  options: { codexUnavailable?: boolean; claudeSnapshot: ClaudeUsageSnapshot | undefined },
+): string {
+  // CC 只反映 7d，与 Codex 处理一致，保持状态栏三段
+  const ccChip = formatClaudeCompactProgressChip(options.claudeSnapshot);
+  // Codex 固定用 secondary（7d），不再混显 5h
+  const codexUnavailable = Boolean(options.codexUnavailable) || !quota?.secondary;
+  const codexChip = formatCompactProgressChip(quota?.secondary, codexUnavailable);
+  const grokChip = formatGrokCompactProgressChip(grokSnapshot);
+  return `${ccChip} · ${codexChip} · ${grokChip}`;
+}
+
+/** Codex 产品紧凑段：`codex 7d 🟩81%`（不用账号名；详情/旧样式） */
+export function formatCodexCompactSegment(
+  windowLabel: "5h" | "7d" | undefined,
+  window: QuotaWindow | undefined,
+  unavailable = false,
+): string {
+  if (unavailable || !window) {
+    if (windowLabel) {
+      return `codex ${windowLabel} —`;
+    }
+    return "codex —";
+  }
+  const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+  const icon = getQuotaToneIcon(window);
+  return windowLabel
+    ? `codex ${windowLabel} ${icon}${percentage}`
+    : `codex ${icon}${percentage}`;
+}
+
+/** 悬停用 Grok 额度行（进度条风格，与 Codex 一致） */
+export function formatGrokQuotaProgress(snapshot: GrokPeriodSnapshot | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {
+  if (!snapshot?.window || snapshot.error) {
+    return "Grok 暂不可用";
+  }
+  const label = snapshot.periodLabel ? `Grok ${snapshot.periodLabel}` : "Grok";
+  return formatQuotaProgress(label, snapshot.window, barLength);
+}
+
+/**
+ * 从 Grok 快照现算重置剩余秒数（优先 periodEndAt，避免冻结的 resetAfterSeconds）。
+ */
+export function getGrokResetAfterSeconds(snapshot: GrokPeriodSnapshot | undefined, nowMs = Date.now()): number | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshot.periodEndAt) {
+    const endMs = Date.parse(snapshot.periodEndAt);
+    if (Number.isFinite(endMs)) {
+      return Math.max(0, Math.round((endMs - nowMs) / 1000));
+    }
+  }
+  if (snapshot.window?.resetAfterSeconds !== undefined) {
+    return Math.max(0, snapshot.window.resetAfterSeconds);
+  }
+  return undefined;
 }
 
 export function formatQuotaProgress(label: string, window: QuotaWindow | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {

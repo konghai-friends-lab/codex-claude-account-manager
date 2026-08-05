@@ -5,7 +5,10 @@ AGENTS.md
 nul
 src/**
 test/**
+scripts/**
+docs/**
 node_modules/**
 tsconfig.json
 package-lock.json
 **/*.ts
+*.vsix

@@ -1,19 +1,12 @@
 import * as vscode from "vscode";
-import { formatAccountLevel, formatQuotaPercentage, formatQuotaSummary, getQuotaAvailablePercent, getQuotaToneIcon } from "./accountPresentation";
+import { formatStatusBarQuotaLine, getQuotaAvailablePercent } from "./accountPresentation";
 
-import { AccountProfile, ExternalAuthNotice, QuotaSnapshot, QuotaWindow } from "./types";
-
-
+import { AccountProfile, ClaudeUsageSnapshot, ExternalAuthNotice, GrokPeriodSnapshot } from "./types";
 
 
-function escapeMarkdown(value: string): string {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
-}
 
 
 const STATUS_BAR_ACCOUNT_NAME_MAX_LENGTH = 8;
-const TOOLTIP_ACCOUNT_INDENT = "&nbsp;&nbsp;";
-const TOOLTIP_ACCOUNT_DETAIL_INDENT = "&nbsp;&nbsp;&nbsp;&nbsp;";
 
 
 function truncateForStatusBar(value: string): string {
@@ -39,48 +32,7 @@ function formatStatusBarAccountName(value: string): string {
   return truncateForStatusBar(compactPart || trimmed);
 }
 
-function pickStatusBarQuotaWindow(quota: QuotaSnapshot | undefined): { label: "5h" | "7d" | undefined; window: QuotaWindow | undefined } {
-  const primaryPercent = getQuotaAvailablePercent(quota?.primary);
-  const secondaryPercent = getQuotaAvailablePercent(quota?.secondary);
 
-  if (primaryPercent === undefined && secondaryPercent === undefined) {
-    return { label: undefined, window: undefined };
-  }
-
-  if (primaryPercent === undefined) {
-    return { label: "7d", window: quota?.secondary };
-  }
-
-  if (secondaryPercent === undefined) {
-    return { label: "5h", window: quota?.primary };
-  }
-
-  return secondaryPercent < primaryPercent
-    ? { label: "7d", window: quota?.secondary }
-    : { label: "5h", window: quota?.primary };
-}
-
-function formatCompactQuota(quota: QuotaSnapshot | undefined): string {
-  const { label, window } = pickStatusBarQuotaWindow(quota);
-  const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
-  return `${label ? `${label} ` : ""}${getQuotaToneIcon(window)}${percentage}`;
-}
-
-function getTooltipMarkerColor(account: AccountProfile): string {
-
-  switch (getAccountHealthState(account)) {
-    case "error":
-      return "#f85149";
-    case "warning":
-      return "#d29922";
-    default:
-      return "#3fb950";
-  }
-}
-
-function formatActiveTooltipMarker(account: AccountProfile): string {
-  return `<span style="color:${getTooltipMarkerColor(account)};">⬤</span>`;
-}
 
 type AccountSortBy = "smart" | "min-quota" | "reset-time" | "name";
 type AccountSortOrder = "asc" | "desc";
@@ -189,146 +141,6 @@ function sortAccountsForDisplay(
   });
 }
 
-function formatTooltipEmail(account: AccountProfile, showEmail: boolean, nameOverride?: string): string | undefined {
-  if (!showEmail || !account.email) {
-    return undefined;
-  }
-
-  // 如果 name 本身就是邮箱，避免重复显示
-  const displayName = nameOverride ?? account.name;
-  if (displayName.includes("@")) {
-    return undefined;
-  }
-
-  // 用 HTML 实体 &#64; 替代 @，阻止 VS Code Markdown 的 mailto: 自动链接识别。
-  // VS Code 渲染时显示为 @，复制时还原为纯文本 @，不插入任何不可见字符。
-  return account.email.replace(/@/g, "&#64;");
-}
-
-function formatTooltipTitle(account: AccountProfile, showEmail: boolean, nameOverride?: string): string {
-  const rawName = nameOverride ?? account.name;
-
-  // 如果 name 本身就是邮箱，需要转义 @ 阻止 mailto 自动链接，同时跳过独立的 email 显示
-  const displayName = rawName.includes("@") ? rawName.replace(/@/g, "&#64;") : rawName;
-
-  const titleBits = [
-    displayName,
-    formatAccountLevel(account.planType),
-    getHealthLabel(account),
-    formatTooltipEmail(account, showEmail, nameOverride),
-  ].filter((value): value is string => Boolean(value));
-
-  return titleBits.join(" · ");
-}
-
-function formatTooltipDetailLine(account: AccountProfile): string | undefined {
-  const details: string[] = [];
-  const primaryReset = formatReset(account.quota?.primary);
-  const secondaryReset = formatReset(account.quota?.secondary);
-  const updatedAt = formatTimestamp(account.quota?.fetchedAt);
-
-  if (primaryReset) {
-    details.push(`5h 重置 ${primaryReset}`);
-  }
-  if (secondaryReset) {
-    details.push(`7d 重置 ${secondaryReset}`);
-  }
-  if (updatedAt) {
-    details.push(`更新 ${updatedAt}`);
-  }
-  if (account.tokenHealth?.hasRefreshToken === false) {
-    details.push("缺少 refresh token");
-  }
-  if ((account.tokenHealth?.consecutiveRecoveryFailures ?? 0) > 0) {
-    details.push(`恢复失败 ${(account.tokenHealth?.consecutiveRecoveryFailures ?? 0)} 次`);
-  }
-  if (account.quota?.error) {
-    const raw = account.quota.error.trim();
-    // 截取简明摘要：取第一个句号/换行之前的内容，最多 40 字符
-    const summary = raw.length > 40 ? raw.slice(0, 37) + "…" : raw;
-    details.push(summary);
-  }
-
-  return details.length > 0 ? details.join(" · ") : undefined;
-}
-
-function formatTooltipRefreshLine(account: AccountProfile): string | undefined {
-  if (!account.quota?.error) {
-    return undefined;
-  }
-  const args = encodeURIComponent(JSON.stringify([account.id]));
-  return `[刷新](command:codexAccountManager.refreshSingleAccount?${args} "仅刷新此账号")`;
-}
-
-function formatActiveTooltipBlock(account: AccountProfile, showEmail: boolean): string {
-  const lines = [`${formatActiveTooltipMarker(account)} ${formatTooltipTitle(account, showEmail)}  \n`];
-  const detailLine = formatTooltipDetailLine(account);
-
-  lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${formatQuotaSummary(account.quota, 8)}  \n`);
-
-  if (detailLine) {
-    const refreshLine = formatTooltipRefreshLine(account);
-    const suffix = refreshLine ? ` · ${refreshLine}` : "";
-    lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${escapeMarkdown(detailLine)}${suffix}  \n`);
-  } else {
-    const refreshLine = formatTooltipRefreshLine(account);
-    if (refreshLine) {
-      lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${refreshLine}  \n`);
-    }
-  }
-
-  return lines.join("");
-}
-
-
-
-
-
-function formatReset(window: QuotaWindow | undefined): string | undefined {
-
-  if (!window || window.resetAfterSeconds === undefined) {
-    return undefined;
-  }
-
-  const totalSeconds = Math.max(0, window.resetAfterSeconds);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-
-  const parts: string[] = [];
-  if (days > 0) {
-    parts.push(`${days}天`);
-  }
-  if (hours > 0) {
-    parts.push(`${hours}小时`);
-  }
-  if (minutes > 0 || parts.length === 0) {
-    parts.push(`${minutes}分钟`);
-  }
-
-  return parts.join("");
-}
-
-
-function formatTimestamp(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return undefined;
-  }
-
-  return date.toLocaleString("zh-CN", {
-    hour12: false,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function looksAuthRelatedError(error: string | undefined): boolean {
   const normalizedError = String(error || "").toLowerCase();
   return ["401", "403", "unauthorized", "forbidden", "expired", "invalid token", "invalid_token", "refresh token", "重新导入", "自动恢复失败"].some((keyword) => normalizedError.includes(keyword));
@@ -355,24 +167,13 @@ function getAccountHealthState(account: AccountProfile): "healthy" | "warning" |
   return "healthy";
 }
 
-function getHealthLabel(account: AccountProfile): string {
-  switch (getAccountHealthState(account)) {
-    case "error":
-      return "异常";
-    case "warning":
-      return "提醒";
-    default:
-      return "健康";
-  }
-}
-
 function getLeadingIcon(account: AccountProfile | undefined, refreshing: boolean): string {
   if (refreshing) {
     return "$(sync~spin)";
   }
 
   if (!account) {
-    return "$(account)";
+    return "$(robot)";
   }
 
   switch (getAccountHealthState(account)) {
@@ -381,13 +182,13 @@ function getLeadingIcon(account: AccountProfile | undefined, refreshing: boolean
     case "warning":
       return "$(warning)";
     default:
-      return "$(account)";
+      return "$(robot)";
   }
 }
 
 function getNoticeIcon(notice: ExternalAuthNotice | undefined): string {
   if (!notice) {
-    return "$(account)";
+    return "$(robot)";
   }
 
   return "$(warning)";
@@ -403,28 +204,42 @@ function formatNoticeText(notice: ExternalAuthNotice | undefined): string | unde
 
 
 
-function buildCommandUri(command: string, args: unknown[]): string {
-
-  return `command:${command}?${encodeURIComponent(JSON.stringify(args))}`;
-}
-
 type StatusBarRenderState = {
   accounts: AccountProfile[];
   activeAccountId: string | undefined;
   refreshing: boolean;
   showEmail: boolean;
   notice: ExternalAuthNotice | undefined;
+  grokSnapshot: GrokPeriodSnapshot | undefined;
+  claudeSnapshot: ClaudeUsageSnapshot | undefined;
 };
 
 
+/**
+ * 右侧状态栏：用量条 + 紧贴的菜单 icon。
+ * - 用量条：左键打开额度详情（底部 Panel）
+ * - 菜单：左键打开操作菜单
+ *
+ * VS Code Right 对齐：数值越大越靠左。用负 priority 把条目压到最右侧，
+ * 尽量贴在通知铃铛左边；相邻数值保证用量条与菜单不被其它扩展拆开。
+ * 注意：无法 100% 钉死在铃铛旁（内置项/其它扩展 priority 会插队）。
+ */
+const STATUS_PRIORITY_QUOTA = -999;
+const STATUS_PRIORITY_MENU = -1000;
+
 export class StatusBarController implements vscode.Disposable {
-  private item: vscode.StatusBarItem;
+  /** 用量摘要：左键打开额度详情气泡 */
+  private quotaItem: vscode.StatusBarItem;
+  /** 三横杠菜单：紧贴用量条右侧 */
+  private menuItem: vscode.StatusBarItem;
   private lastRenderState: StatusBarRenderState = {
     accounts: [],
     activeAccountId: undefined,
     refreshing: false,
     showEmail: true,
     notice: undefined,
+    grokSnapshot: undefined,
+    claudeSnapshot: undefined,
   };
 
   private renderNonce = 0;
@@ -437,7 +252,8 @@ export class StatusBarController implements vscode.Disposable {
     this.sortBy = config.get<AccountSortBy>("accountSortBy", "smart");
     this.sortOrder = config.get<AccountSortOrder>("accountSortOrder", "desc");
 
-    this.item = this.createItem();
+    this.quotaItem = this.createQuotaItem();
+    this.menuItem = this.createMenuItem();
     this.showLoading();
 
     this.configChangeListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -446,11 +262,37 @@ export class StatusBarController implements vscode.Disposable {
         const cfg = vscode.workspace.getConfiguration("codexAccountManager");
         this.sortBy = cfg.get<AccountSortBy>("accountSortBy", "smart");
         this.sortOrder = cfg.get<AccountSortOrder>("accountSortOrder", "desc");
-        this.forceTooltipRefresh();
+        this.forceStatusBarRefresh();
       }
     });
 
     context.subscriptions.push(this.configChangeListener);
+  }
+
+  getSortBy(): AccountSortBy {
+    return this.sortBy;
+  }
+
+  getSortOrder(): AccountSortOrder {
+    return this.sortOrder;
+  }
+
+  getSortByLabel(): string {
+    const labels: Record<AccountSortBy, string> = {
+      smart: "推荐",
+      "min-quota": "额度",
+      "reset-time": "重置时间",
+      name: "账号",
+    };
+    return labels[this.sortBy];
+  }
+
+  getSortOrderLabel(): string {
+    return this.sortOrder === "asc" ? "升序" : "降序";
+  }
+
+  getOrderedAccounts(accounts: AccountProfile[], activeAccountId: string | undefined): AccountProfile[] {
+    return sortAccountsForDisplay(accounts, activeAccountId, this.sortBy, this.sortOrder);
   }
 
   async setSortBy(sortBy: string): Promise<void> {
@@ -466,13 +308,14 @@ export class StatusBarController implements vscode.Disposable {
     await vscode.workspace.getConfiguration("codexAccountManager").update("accountSortOrder", next, vscode.ConfigurationTarget.Global);
   }
 
-
   update(
     accounts: AccountProfile[],
     activeAccountId: string | undefined,
     refreshing: boolean,
     showEmail: boolean,
     notice: ExternalAuthNotice | undefined,
+    grokSnapshot?: GrokPeriodSnapshot,
+    claudeSnapshot?: ClaudeUsageSnapshot,
   ): void {
     this.lastRenderState = {
       accounts: [...accounts],
@@ -480,211 +323,118 @@ export class StatusBarController implements vscode.Disposable {
       refreshing,
       showEmail,
       notice,
+      grokSnapshot,
+      claudeSnapshot,
     };
-    this.renderInto(this.item);
+    this.renderQuotaItem();
+    this.renderMenuItem();
   }
 
-
-  forceTooltipRefresh(): void {
+  forceStatusBarRefresh(): void {
     this.renderNonce += 1;
-    this.item.dispose();
-    this.item = this.createItem();
-    this.renderInto(this.item);
+    this.quotaItem.dispose();
+    this.menuItem.dispose();
+    this.quotaItem = this.createQuotaItem();
+    this.menuItem = this.createMenuItem();
+    this.renderQuotaItem();
+    this.renderMenuItem();
   }
 
   showLoading(message = "Codex 加载中"): void {
     const invisibleRefreshMarker = this.renderNonce % 2 === 0 ? "\u200B" : "\u200C";
-    this.item.text = `$(sync~spin) ${message}${invisibleRefreshMarker}`;
-    this.item.tooltip = "Codex Account Manager 正在初始化。";
+    this.quotaItem.text = `$(sync~spin) ${message}${invisibleRefreshMarker}`;
+    this.quotaItem.tooltip = "加载中…";
+    this.menuItem.text = "$(menu)";
+    this.menuItem.tooltip = "账号操作";
   }
 
   showWarning(message: string, detail?: string): void {
     const invisibleRefreshMarker = this.renderNonce % 2 === 0 ? "\u200B" : "\u200C";
-    this.item.text = `$(warning) ${message}${invisibleRefreshMarker}`;
-    this.item.tooltip = detail ? `${message}\n${detail}` : message;
+    this.quotaItem.text = `$(warning) ${message}${invisibleRefreshMarker}`;
+    this.quotaItem.tooltip = detail ?? message;
+    this.menuItem.text = "$(menu)";
+    this.menuItem.tooltip = "账号操作";
   }
 
-  private createItem(): vscode.StatusBarItem {
+  private createQuotaItem(): vscode.StatusBarItem {
     let item: vscode.StatusBarItem;
-
     try {
       item = (vscode.window.createStatusBarItem as unknown as (id: string, alignment?: vscode.StatusBarAlignment, priority?: number) => vscode.StatusBarItem)(
         "codex-account-manager.status",
         vscode.StatusBarAlignment.Right,
-        100,
+        STATUS_PRIORITY_QUOTA,
       );
     } catch {
-      item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+      item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, STATUS_PRIORITY_QUOTA);
     }
-
-    item.command = "codexAccountManager.manageAccounts";
+    item.name = "Codex / Grok / CC 额度";
+    // 左键打开详情（Markdown 气泡，贴状态栏）
+    item.command = "codexAccountManager.showQuotaDetails";
     item.show();
     return item;
   }
 
+  private createMenuItem(): vscode.StatusBarItem {
+    let item: vscode.StatusBarItem;
+    try {
+      item = (vscode.window.createStatusBarItem as unknown as (id: string, alignment?: vscode.StatusBarAlignment, priority?: number) => vscode.StatusBarItem)(
+        "codex-account-manager.menu",
+        vscode.StatusBarAlignment.Right,
+        STATUS_PRIORITY_MENU,
+      );
+    } catch {
+      item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, STATUS_PRIORITY_MENU);
+    }
+    item.name = "Codex 账号菜单";
+    item.text = "$(menu)";
+    item.command = "codexAccountManager.manageAccounts";
+    item.tooltip = "账号操作";
+    item.show();
+    return item;
+  }
 
-  private renderInto(item: vscode.StatusBarItem): void {
-    const { accounts, activeAccountId, refreshing, showEmail, notice } = this.lastRenderState;
+  private renderMenuItem(): void {
+    this.menuItem.text = "$(menu)";
+    this.menuItem.tooltip = "账号操作";
+    this.menuItem.command = "codexAccountManager.manageAccounts";
+  }
+
+  private renderQuotaItem(): void {
+    const { accounts, activeAccountId, refreshing, showEmail, notice, grokSnapshot, claudeSnapshot } = this.lastRenderState;
     const activeAccount = accounts.find((account) => account.id === activeAccountId);
     const invisibleRefreshMarker = this.renderNonce % 2 === 0 ? "\u200B" : "\u200C";
     const noticeText = formatNoticeText(notice);
 
+    this.quotaItem.command = "codexAccountManager.showQuotaDetails";
+    // 详情统一走底部面板（左键）。悬停只留一句提示，不再重复渲染整份详情。
+    this.quotaItem.tooltip = "点击查看额度详情";
+
     if (noticeText) {
-      item.text = `${getNoticeIcon(notice)} ${noticeText}${invisibleRefreshMarker}`;
-      item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice);
+      // 通知文案已较长：只保留极简进度，避免整条被挤出
+      const line = formatStatusBarQuotaLine(activeAccount?.quota, grokSnapshot, {
+        codexUnavailable: !activeAccount,
+        claudeSnapshot,
+      });
+      this.quotaItem.text = `${getNoticeIcon(notice)} ${line}${invisibleRefreshMarker}`;
+      this.quotaItem.accessibilityInformation = {
+        label: `${noticeText}。CC · Codex · Grok 7d：${line}`,
+      };
       return;
     }
 
     const leadingIcon = getLeadingIcon(activeAccount, refreshing);
-
-    if (!activeAccount) {
-      item.text = `${leadingIcon} Codex 未登录${invisibleRefreshMarker}`;
-      item.tooltip = this.buildTooltip(accounts, undefined, showEmail, notice);
-      return;
-    }
-
-
-    item.text = `${leadingIcon} ${formatStatusBarAccountName(activeAccount.name)} · ${formatCompactQuota(activeAccount.quota)}${invisibleRefreshMarker}`;
-
-    item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice);
-  }
-
-
-
-
-
-
-
-  private buildTooltip(
-    accounts: AccountProfile[],
-    activeAccountId: string | undefined,
-    showEmail: boolean,
-    notice: ExternalAuthNotice | undefined,
-  ): vscode.MarkdownString {
-    const tooltip = new vscode.MarkdownString(undefined, true);
-    tooltip.supportHtml = true;
-    tooltip.isTrusted = {
-      enabledCommands: [
-        "codexAccountManager.activateAccount",
-        "codexAccountManager.manageAccounts",
-        "codexAccountManager.importCurrentAuth",
-        "codexAccountManager.importAuthFile",
-        "codexAccountManager.openCurrentAuthPath",
-        "codexAccountManager.exportAccounts",
-        "codexAccountManager.importAccountBundle",
-        "codexAccountManager.switchAccount",
-        "codexAccountManager.switchToLastAccount",
-        "codexAccountManager.refreshQuotas",
-        "codexAccountManager.refreshQuotasFromTooltip",
-        "codexAccountManager.showAccountHealth",
-        "codexAccountManager.quickFixAccountHealth",
-        "codexAccountManager.toggleAccountSortOrder",
-        "codexAccountManager.setAccountSortBy",
-        "codexAccountManager.renameAccount",
-        "codexAccountManager.removeAccount",
-        "codexAccountManager.loginNewAccount",
-        "codexAccountManager.dismissExternalAuthNotice",
-        "codexAccountManager.openSettings",
-        "codexAccountManager.refreshSingleAccount",
-        "chatgpt.openSidebar",
-      ],
-    };
-
-    tooltip.appendMarkdown("**Codex 账号列表**\n\n");
-
-    if (notice) {
-      const noticeTitle = escapeMarkdown(notice.title);
-      const noticeDetail = notice.detail ? escapeMarkdown(notice.detail) : undefined;
-      tooltip.appendMarkdown(`> $(warning) ${noticeTitle}  \n`);
-      if (noticeDetail) {
-        tooltip.appendMarkdown(`> ${noticeDetail}  \n`);
-      }
-
-      tooltip.appendMarkdown("> [立即导入当前 auth.json](command:codexAccountManager.importCurrentAuth) · [暂不提醒](command:codexAccountManager.dismissExternalAuthNotice)\n\n");
-    }
-
-
-    if (accounts.length === 0) {
-      tooltip.appendMarkdown("还没有导入账号，先从当前 `auth.json` 或文件导入一个。\n\n");
-    } else {
-      const orderedAccounts = sortAccountsForDisplay(accounts, activeAccountId, this.sortBy, this.sortOrder);
-      orderedAccounts.forEach((account, index) => {
-        const accountName = escapeMarkdown(account.name);
-        const activateUri = buildCommandUri("codexAccountManager.activateAccount", [account.id]);
-        const isActive = account.id === activeAccountId;
-        const linkedName = `[${accountName}](${activateUri} "切换到 ${accountName}")`;
-        const detailLine = formatTooltipDetailLine(account);
-
-        if (isActive) {
-          tooltip.appendMarkdown(`${formatActiveTooltipBlock(account, showEmail)}\n`);
-        } else {
-          const title = formatTooltipTitle(account, showEmail, linkedName);
-
-          tooltip.appendMarkdown(`${TOOLTIP_ACCOUNT_INDENT}• ${title}  \n`);
-          tooltip.appendMarkdown(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${formatQuotaSummary(account.quota, 8)}  \n`);
-
-          if (detailLine) {
-            const refreshLine = formatTooltipRefreshLine(account);
-            const suffix = refreshLine ? ` · ${refreshLine}` : "";
-            tooltip.appendMarkdown(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${escapeMarkdown(detailLine)}${suffix}  \n`);
-          } else {
-            const refreshLine = formatTooltipRefreshLine(account);
-            if (refreshLine) {
-              tooltip.appendMarkdown(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${refreshLine}  \n`);
-            }
-          }
-        }
-
-        if (index < orderedAccounts.length - 1) {
-          tooltip.appendMarkdown("\n---\n\n");
-        } else {
-          tooltip.appendMarkdown("\n");
-        }
-      });
-    }
-
-    tooltip.appendMarkdown("---\n\n");
-    tooltip.appendMarkdown("**快速访问**  \n");
-    tooltip.appendMarkdown("账号：");
-    tooltip.appendMarkdown("[管理](command:codexAccountManager.manageAccounts) · ");
-    tooltip.appendMarkdown("[导入当前](command:codexAccountManager.importCurrentAuth) · ");
-    tooltip.appendMarkdown("[登录新账号](command:codexAccountManager.loginNewAccount) · ");
-    tooltip.appendMarkdown("[重命名](command:codexAccountManager.renameAccount) · ");
-    tooltip.appendMarkdown("[删除](command:codexAccountManager.removeAccount)  \n");
-    tooltip.appendMarkdown("额度：");
-    tooltip.appendMarkdown("[刷新](command:codexAccountManager.refreshQuotasFromTooltip) · ");
-    tooltip.appendMarkdown("[健康检查](command:codexAccountManager.showAccountHealth) · ");
-    tooltip.appendMarkdown("[快速修复](command:codexAccountManager.quickFixAccountHealth)  \n");
-
-    // 排序行：放在额度后面
-    const sortArgs = encodeURIComponent(JSON.stringify([]));
-    const sortByLabels: Record<AccountSortBy, string> = {
-      "smart": "推荐",
-      "min-quota": "额度",
-      "reset-time": "重置时间",
-      "name": "账号",
-    };
-    const sortByKeys: AccountSortBy[] = ["smart", "min-quota", "reset-time", "name"];
-    const sortParts = sortByKeys.map((key) => {
-      if (key === this.sortBy) {
-        return sortByLabels[key];
-      }
-      return `[${sortByLabels[key]}](command:codexAccountManager.setAccountSortBy?${encodeURIComponent(JSON.stringify([key]))})`;
+    const line = formatStatusBarQuotaLine(activeAccount?.quota, grokSnapshot, {
+      codexUnavailable: !activeAccount,
+      claudeSnapshot,
     });
-    tooltip.appendMarkdown(`排序：${sortParts.join(" · ")} · `);
-    // 升序/降序：当前方向为纯文本不可点，另一个为可点链接
-    const orderAsc = this.sortOrder === "asc";
-    tooltip.appendMarkdown(`${orderAsc ? "升序" : `[升序](command:codexAccountManager.toggleAccountSortOrder?${sortArgs})`} · ${!orderAsc ? "降序" : `[降序](command:codexAccountManager.toggleAccountSortOrder?${sortArgs})`}  \n`);
-
-    tooltip.appendMarkdown("配置：");
-    tooltip.appendMarkdown("[配置参数](command:codexAccountManager.openSettings) · ");
-    tooltip.appendMarkdown("[导出账号包](command:codexAccountManager.exportAccounts) · ");
-    tooltip.appendMarkdown("[导入账号包](command:codexAccountManager.importAccountBundle)");
-    return tooltip;
+    this.quotaItem.text = `${leadingIcon} ${line}${invisibleRefreshMarker}`;
+    this.quotaItem.accessibilityInformation = {
+      label: `CC · Codex · Grok 7d：${line}`,
+    };
   }
-
 
   dispose(): void {
-    this.item.dispose();
+    this.quotaItem.dispose();
+    this.menuItem.dispose();
   }
 }

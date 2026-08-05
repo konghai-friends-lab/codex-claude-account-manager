@@ -17,9 +17,14 @@ Secret Storage，刷新额度，并将所选账号写回 Codex 本地的 `auth.j
 | `src/manager.ts` | 核心编排：命令、账号切换、刷新循环、自动切号与用户提示。 |
 | `src/store.ts` | 账号元数据写入 `globalState`，凭据写入 `SecretStorage`。 |
 | `src/auth.ts` | 多平台 Codex 路径解析、安全解析与原子写入 `auth.json`。 |
-| `src/quotaClient.ts` | 额度请求及响应头解析。 |
+| `src/quotaClient.ts` | Codex 额度请求及响应头解析。 |
+| `src/grokAuth.ts` | 本机 Grok `auth.json` 只读解析（不写回、不进 SecretStorage）。 |
+| `src/grokQuotaClient.ts` | Grok Build 周期剩余（billing credits）请求与解析。外部非稳定集成。 |
+| `src/claudeAuth.ts` | 本机 Claude Code 凭据只读解析（macOS Keychain 优先，回退 `~/.claude/.credentials.json`；不写回、不进 SecretStorage）。 |
+| `src/claudeQuotaClient.ts` | Claude Code 5h / 7d 用量请求与解析。外部非稳定集成。 |
 | `src/tokenRecovery.ts` | refresh token 刷新流程及认证数据标准化。 |
-| `src/statusBar.ts` | 状态栏项目与 Markdown 悬停提示渲染。 |
+| `src/statusBar.ts` | 状态栏用量段 + 菜单 icon（左键进底部面板）。 |
+| `src/bottomPanel.ts` | 底部 Panel Webview：额度详情与账号操作菜单。 |
 | `src/accountPresentation.ts` | 纯额度计算、排序与展示辅助函数。 |
 | `src/accountHealth.ts` | 账号健康度判断与 Markdown 报告生成。 |
 | `src/accountBundle.ts` | 版本化账号配置包的序列化与防御性解析。 |
@@ -63,6 +68,11 @@ npm run compile
 - 保持 `package.json`、`manager.ts` 与 `README.md` 中的 UI 文案和配置键一致。
 - 每个用户可调用命令都要在 `package.json` 中声明 command contribution。
 - 发布时保持 `package.json` 版本、发布说明/README 与 VSIX 包一致。
+- 版本唯一真相源是 `package.json` 的 `version`。发测试/正式包用：
+  - `npm run version:current` 查看当前版本与将生成的 VSIX 名
+  - `npm run release -- patch --notes "变更说明"`（推荐：先 bump 再打包）
+  - `npm run vsix` 仅按当前版本打包；同版本 `.vsix` 已存在时拒绝覆盖，需 `--force`
+  - 禁止手工改版本后仍用旧号打包；`*.vsix` 不提交仓库
 - 避免无关的格式化噪声；不要手工编辑 `node_modules/`、`out/` 或 `*.vsix`。
 
 ## 升级与开源检查清单
@@ -88,3 +98,9 @@ npm run compile
 - 不能假定当前已登录账号可以安全覆盖；导入或切换前须对账并提示用户。
 - 不能因网络可用就假定额度请求或令牌刷新会成功。
 - 自动切号可能中断正在进行的 Codex 会话；必须保留空闲保护与手动切换优先级。
+
+## 已记录的解决方案与术语
+
+- `docs/solutions/` 保存已解决问题的学习文档，按类别组织，并使用 YAML frontmatter
+  标注 `module`、`tags` 与 `problem_type`；在涉及已有模块的实现、调试或决策时可先检索。
+- `CONCEPTS.md` 记录项目共享领域术语，适用于熟悉代码库或讨论领域概念时查阅。

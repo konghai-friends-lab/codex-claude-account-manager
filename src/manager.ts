@@ -17,11 +17,16 @@ import {
 import { AccountHealthCheck, evaluateAccountHealth, renderAccountHealthMarkdown } from "./accountHealth";
 import { clearCodexAuthFile, getDefaultCodexAuthPath, getDefaultCodexSessionsPath, loadAuthDataFromFile, syncCodexAuthFile } from "./auth";
 
+import { BottomPanelController, ManageMenuAction } from "./bottomPanel";
+import { loadClaudeAuth } from "./claudeAuth";
+import { ClaudeQuotaClient, buildClaudeSnapshot } from "./claudeQuotaClient";
+import { loadGrokAuthFromFile } from "./grokAuth";
+import { GrokQuotaClient } from "./grokQuotaClient";
 import { CodexQuotaClient } from "./quotaClient";
 import { StatusBarController } from "./statusBar";
 import { AccountStore } from "./store";
 import { CodexTokenRecoveryClient, shouldAttemptTokenRecovery, isSessionRevokedError, isTokenExpiredAndUnrecoverableError, isUnrecoverableAuthError } from "./tokenRecovery";
-import { AccountProfile, AuthData, ExportedAccountItem, ExternalAuthNotice, QuotaSnapshot } from "./types";
+import { AccountProfile, AuthData, ClaudeUsageSnapshot, ExportedAccountItem, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot } from "./types";
 
 
 
@@ -121,6 +126,7 @@ export class CodexAccountManager implements vscode.Disposable {
 
   private readonly store: AccountStore;
   private readonly statusBar: StatusBarController;
+  private readonly bottomPanel: BottomPanelController;
   private readonly outputChannel: vscode.OutputChannel;
   private readonly disposables: vscode.Disposable[] = [];
 
@@ -128,6 +134,10 @@ export class CodexAccountManager implements vscode.Disposable {
   private refreshing = false;
   private externalAuthNotice: ExternalAuthNotice | undefined;
   private lastDetectedExternalAuthFingerprint: string | undefined;
+  /** 本机当前 Grok 登录的周期剩余快照（与 Codex 账号 store 分离） */
+  private grokSnapshot: GrokPeriodSnapshot | undefined;
+  /** 本机当前 Claude Code 登录的 5h / 7d 用量快照 */
+  private claudeSnapshot: ClaudeUsageSnapshot | undefined;
   /** 每次手动切号时递增，供 maybeAutoSwitchLowQuotaAccount 检测是否被抢先 */
   private manualSwitchGeneration = 0;
   private readonly authPath = getDefaultCodexAuthPath();
@@ -136,14 +146,31 @@ export class CodexAccountManager implements vscode.Disposable {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.store = new AccountStore(context);
     this.statusBar = new StatusBarController(context);
+    this.bottomPanel = new BottomPanelController(
+      context.extensionUri,
+      (actionId) => this.runManageAction(actionId as ManageActionItem["action"]),
+      async (command, args) => {
+        if (args && args.length > 0) {
+          await vscode.commands.executeCommand(command, ...args);
+          return;
+        }
+        await vscode.commands.executeCommand(command);
+      },
+    );
     this.outputChannel = vscode.window.createOutputChannel("Codex Account Manager");
-    this.disposables.push(this.outputChannel);
+    this.disposables.push(this.outputChannel, this.bottomPanel);
   }
 
 
   async activate(): Promise<void> {
     this.statusBar.showLoading();
     this.tsLog("activate:start");
+
+    this.disposables.push(
+      vscode.window.registerWebviewViewProvider(BottomPanelController.viewType, this.bottomPanel, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+    );
 
     this.registerCommands();
     this.disposables.push(
@@ -272,6 +299,7 @@ export class CodexAccountManager implements vscode.Disposable {
   private registerCommands(): void {
     this.disposables.push(
       vscode.commands.registerCommand("codexAccountManager.manageAccounts", () => this.manageAccounts()),
+      vscode.commands.registerCommand("codexAccountManager.showQuotaDetails", () => this.showQuotaDetails()),
       vscode.commands.registerCommand("codexAccountManager.importCurrentAuth", () => this.importCurrentAuth()),
       vscode.commands.registerCommand("codexAccountManager.importAuthFile", () => this.importAuthFile()),
       vscode.commands.registerCommand("codexAccountManager.openCurrentAuthPath", () => this.openCurrentAuthPath()),
@@ -282,7 +310,6 @@ export class CodexAccountManager implements vscode.Disposable {
       vscode.commands.registerCommand("codexAccountManager.switchAccount", () => this.switchAccount()),
       vscode.commands.registerCommand("codexAccountManager.switchToLastAccount", () => this.switchToLastAccount()),
       vscode.commands.registerCommand("codexAccountManager.refreshQuotas", () => this.refreshAllQuotas(false)),
-      vscode.commands.registerCommand("codexAccountManager.refreshQuotasFromTooltip", () => this.refreshQuotasFromTooltip()),
       vscode.commands.registerCommand("codexAccountManager.loginNewAccount", () => this.loginNewAccount()),
       vscode.commands.registerCommand("codexAccountManager.dismissExternalAuthNotice", () => this.dismissExternalAuthNotice()),
       vscode.commands.registerCommand("codexAccountManager.renameAccount", () => this.renameAccount()),
@@ -480,14 +507,53 @@ export class CodexAccountManager implements vscode.Disposable {
 
   private async refreshStatusBar(): Promise<void> {
     const { accounts, activeAccountId } = await this.loadAccountContext();
-    this.statusBar.update(accounts, activeAccountId, this.refreshing, this.showEmailInTooltip, this.externalAuthNotice);
+    this.statusBar.update(
+      accounts,
+      activeAccountId,
+      this.refreshing,
+      this.showEmailInTooltip,
+      this.externalAuthNotice,
+      this.grokSnapshot,
+      this.claudeSnapshot,
+    );
+  }
+
+  /** 刷新本机 Grok 周期剩余；失败只写占位快照，不抛错、不打断 Codex 流程 */
+  private async refreshGrokPeriodRemaining(): Promise<void> {
+    const fetchedAt = new Date().toISOString();
+    const auth = loadGrokAuthFromFile();
+    if (!auth) {
+      this.grokSnapshot = {
+        fetchedAt,
+        error: "未登录",
+      };
+      return;
+    }
+
+    try {
+      const client = new GrokQuotaClient(auth, this.requestTimeoutMs);
+      this.grokSnapshot = await client.fetchPeriodRemaining();
+    } catch (error) {
+      this.grokSnapshot = {
+        fetchedAt,
+        error: error instanceof Error ? error.message : "刷新 Grok 周期额度失败",
+      };
+    }
   }
 
 
-  private async refreshQuotasFromTooltip(): Promise<void> {
-    await this.refreshAllQuotas(false);
-    this.statusBar.forceTooltipRefresh();
+  /**
+   * 刷新本机 Claude Code 用量；失败只写占位快照，不抛错、不打断 Codex 流程。
+   * 凭据每轮现读、不缓存：这样 CC 退出登录会在下一轮生效，
+   * 令牌也不会长期驻留在 manager 上。
+   */
+  private async refreshClaudeUsage(): Promise<void> {
+    this.claudeSnapshot = await buildClaudeSnapshot(
+      () => loadClaudeAuth(),
+      (auth) => new ClaudeQuotaClient(auth, this.requestTimeoutMs),
+    );
   }
+
 
   private async refreshSingleAccount(accountId?: string): Promise<void> {
     if (!accountId) {
@@ -498,8 +564,8 @@ export class CodexAccountManager implements vscode.Disposable {
       return;
     }
     const ok = await this.refreshQuotaForAccount(accountId, true);
-    await this.statusBar.forceTooltipRefresh();
-    // 刷新结果通过 tooltip 和状态栏即可体现，不弹通知
+    this.statusBar.forceStatusBarRefresh();
+    // 刷新结果直接体现在状态栏与底部面板，不弹通知
   }
 
   private buildAccountDescription(account: AccountProfile): string {
@@ -1007,9 +1073,38 @@ export class CodexAccountManager implements vscode.Disposable {
     }
   }
 
+  /**
+   * 状态栏用量条左键：打开额度详情（布局对齐原先气泡：额度一览 + 账号列表 + 精简操作）。
+   * 同时写入 StatusBarItem.tooltip，悬停也能看到同款内容。
+   */
+  private async showQuotaDetails(): Promise<void> {
+    await this.refreshStatusBar();
+    const { accounts, activeAccountId } = await this.loadAccountContext();
+    const ordered = this.statusBar.getOrderedAccounts(accounts, activeAccountId);
+    await this.bottomPanel.showDetails({
+      accounts: ordered,
+      activeAccountId,
+      showEmail: this.showEmailInTooltip,
+      notice: this.externalAuthNotice,
+      grokSnapshot: this.grokSnapshot,
+      claudeSnapshot: this.claudeSnapshot,
+      sortByLabel: this.statusBar.getSortByLabel(),
+      sortOrderLabel: this.statusBar.getSortOrderLabel(),
+    });
+  }
+
+  /** 状态栏菜单 icon：底部面板展示操作列表 */
   private async manageAccounts(): Promise<void> {
+    const items = await this.buildManageActionItems();
+    const menuActions: ManageMenuAction[] = items.map((item) => ({
+      id: item.action,
+      label: item.label.replace(/^\$\([^)]+\)\s*/, ""),
+      description: item.description,
+    }));
+    await this.bottomPanel.showMenu(menuActions);
+  }
 
-
+  private async buildManageActionItems(): Promise<ManageActionItem[]> {
     const { accounts, activeAccountId } = await this.loadAccountContext();
     const lastAccountId = await this.store.getLastAccountId();
     const activeAccount = this.findActiveAccount(accounts, activeAccountId);
@@ -1037,7 +1132,6 @@ export class CodexAccountManager implements vscode.Disposable {
       },
       {
         label: "$(export) 导出账号配置包",
-
         description: "导出已保存账号和令牌，便于备份或迁移",
         action: "export-bundle",
       },
@@ -1066,20 +1160,14 @@ export class CodexAccountManager implements vscode.Disposable {
         description: "刷新间隔、自动切号阈值、超时时间等",
         action: "settings",
       },
-
-
-
-
     ];
 
     if (accounts.length > 0) {
-      items.push(
-        {
-          label: "$(account) 切换当前账号",
-          description: activeAccount ? `当前：${activeAccount.name}` : "当前未选择账号",
-          action: "switch",
-        },
-      );
+      items.push({
+        label: "$(account) 切换当前账号",
+        description: activeAccount ? `当前：${activeAccount.name}` : "当前未选择账号",
+        action: "switch",
+      });
 
       if (lastAccount && lastAccount.id !== activeAccountId) {
         items.push({
@@ -1090,13 +1178,11 @@ export class CodexAccountManager implements vscode.Disposable {
       }
 
       items.push(
-
         {
           label: "$(edit) 重命名账号",
           description: "修改展示名称",
           action: "rename",
         },
-
         {
           label: "$(trash) 删除账号",
           description: "移除本地保存的账号与额度缓存",
@@ -1105,15 +1191,11 @@ export class CodexAccountManager implements vscode.Disposable {
       );
     }
 
-    const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: "选择要执行的 Codex 账号操作",
-    });
+    return items;
+  }
 
-    if (!picked) {
-      return;
-    }
-
-    switch (picked.action) {
+  private async runManageAction(action: ManageActionItem["action"]): Promise<void> {
+    switch (action) {
       case "import-current":
         await this.importCurrentAuth();
         break;
@@ -1144,11 +1226,9 @@ export class CodexAccountManager implements vscode.Disposable {
       case "login-new":
         await this.loginNewAccount();
         break;
-
       case "rename":
         await this.renameAccount();
         break;
-
       case "remove":
         await this.removeAccount();
         break;
@@ -2169,9 +2249,21 @@ export class CodexAccountManager implements vscode.Disposable {
     this.refreshing = true;
     await this.refreshStatusBar();
 
+    // Grok / CC 与 Codex 并行；finally 必须 join，避免异常路径留下陈旧 UI（审查 #4）。
+    // 注意：join 只保证「被 await 到」，不保证耗时有界——CC 的凭据读取与
+    // HTTP 各自都设了超时，否则会撑长整个刷新窗口并占住 refreshing 标志，
+    // 连带冻结 Codex 与 Grok 的后续刷新。
+    let grokRefresh: Promise<void> = Promise.resolve();
+    let claudeRefresh: Promise<void> = Promise.resolve();
+
     try {
+      grokRefresh = this.refreshGrokPeriodRemaining();
+      claudeRefresh = this.refreshClaudeUsage();
+
       const accounts = await this.store.listAccounts();
       if (accounts.length === 0) {
+        // allSettled：任一侧刷新 reject 都不能中断 Codex 主流程
+        await Promise.allSettled([grokRefresh, claudeRefresh]);
         if (!silent) {
           void vscode.window.showInformationMessage("还没有可刷新的账号，先导入一个吧。");
         }
@@ -2192,6 +2284,11 @@ export class CodexAccountManager implements vscode.Disposable {
           results.push({ status: "rejected", reason: e });
         }
       }
+
+      // 必须用 allSettled：若这里直接 await 而 Grok/CC 侧 reject，
+      // try 会就地中断，下面的 planType 同步与自动切号整轮被跳过
+      // ——用户停在快耗尽的账号上却不会被切走，且没有任何提示。
+      await Promise.allSettled([grokRefresh, claudeRefresh]);
 
       // 刷新额度完成后顺带同步当前激活账号的 planType：
       // 用户在 OpenAI 后台升级套餐后，auth.json 里的 chatgpt_plan_type 已更新，
@@ -2226,10 +2323,17 @@ export class CodexAccountManager implements vscode.Disposable {
             : "";
         void vscode.window.showInformationMessage(`额度刷新完成：成功 ${refreshedCount} 个，失败 ${failedCount} 个${switchedSuffix}。`);
       }
-
-
-
     } finally {
+      try {
+        await grokRefresh;
+      } catch {
+        // Grok 失败已在 refreshGrokPeriodRemaining 内消化；此处仅确保 join
+      }
+      try {
+        await claudeRefresh;
+      } catch {
+        // CC 失败已在 buildClaudeSnapshot 内消化；此处仅确保 join
+      }
       this.refreshing = false;
       await this.refreshStatusBar();
     }
