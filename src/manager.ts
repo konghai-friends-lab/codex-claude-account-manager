@@ -1713,10 +1713,11 @@ export class CodexAccountManager implements vscode.Disposable {
     let preferredName = existing?.name;
 
     if (!existing) {
-      preferredName = await vscode.window.showInputBox({
-        prompt: "给这个账号起个名字，状态栏和悬停列表都会显示它",
+      preferredName = await this.bottomPanel.askInput({
+        title: "导入账号",
+        prompt: "给这个账号起个名字，状态栏和账号列表都会显示它",
         value: this.deriveDefaultName(authData),
-        validateInput: (value) => (value.trim().length === 0 ? "名称不能为空" : undefined),
+        confirmLabel: "导入",
       });
 
       if (!preferredName) {
@@ -1827,10 +1828,11 @@ export class CodexAccountManager implements vscode.Disposable {
       return;
     }
 
-    const nextName = await vscode.window.showInputBox({
-      prompt: `为账号"${account.name}"输入新的显示名称`,
+    const nextName = await this.bottomPanel.askInput({
+      title: "重命名账号",
+      prompt: `为账号“${account.name}”输入新的显示名称`,
       value: account.name,
-      validateInput: (value) => (value.trim().length === 0 ? "名称不能为空" : undefined),
+      confirmLabel: "重命名",
     });
 
     if (!nextName) {
@@ -1878,18 +1880,20 @@ export class CodexAccountManager implements vscode.Disposable {
   }
 
   private async updateNumberSetting(config: vscode.WorkspaceConfiguration, settingKey: string, description: string): Promise<void> {
-    const input = await vscode.window.showInputBox({
+    // 数值区间与 package.json 中各配置项的 minimum / maximum 保持一致
+    const RANGES: Record<string, { min?: number; max?: number }> = {
+      autoSwitchThresholdPercent: { min: 0, max: 100 },
+      codexIdleThresholdSeconds: { min: 15, max: 600 },
+      requestTimeoutSeconds: { min: 5 },
+      refreshIntervalMinutes: { min: 0 },
+    };
+
+    const input = await this.bottomPanel.askInput({
+      title: "修改配置",
       prompt: description,
       value: String(config.get<number>(settingKey)),
-      validateInput: (value) => {
-        const num = Number(value);
-        if (!Number.isFinite(num)) return "请输入有效数字";
-        if (settingKey === "autoSwitchThresholdPercent" && (num < 0 || num > 100)) return "范围 0 ~ 100";
-        if (settingKey === "codexIdleThresholdSeconds" && (num < 15 || num > 600)) return "范围 15 ~ 600";
-        if (settingKey === "requestTimeoutSeconds" && num < 5) return "最小 5 秒";
-        if (settingKey === "refreshIntervalMinutes" && num < 0) return "最小 0（禁用）";
-        return undefined;
-      },
+      numeric: RANGES[settingKey] ?? {},
+      confirmLabel: "保存",
     });
     if (input === undefined) return;
     const num = Number(input);

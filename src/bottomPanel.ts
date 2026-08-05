@@ -12,7 +12,18 @@ import {
 } from "./accountPresentation";
 import { AccountProfile, ClaudeUsageSnapshot, ExternalAuthNotice, GrokPeriodSnapshot } from "./types";
 
-export type BottomPanelMode = "details" | "menu";
+export type BottomPanelMode = "details" | "menu" | "prompt";
+
+/** 面板内联输入的一次请求。校验在 webview 里现算，回车即提交 */
+export interface PanelPromptOptions {
+  title: string;
+  prompt: string;
+  value?: string;
+  placeholder?: string;
+  /** 数字输入的额外约束；留空表示纯文本 */
+  numeric?: { min?: number; max?: number; integer?: boolean };
+  confirmLabel?: string;
+}
 
 export interface ManageMenuAction {
   id: string;
@@ -43,6 +54,11 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   private mode: BottomPanelMode = "details";
   private details?: QuotaDetailsPayload;
   private menuActions: ManageMenuAction[] = [];
+  private promptOptions?: PanelPromptOptions;
+  /** 当前内联输入的 resolve；取消时以 undefined 结算 */
+  private promptResolve?: (value: string | undefined) => void;
+  /** 进入 prompt 前的模式，提交/取消后回到它 */
+  private modeBeforePrompt: BottomPanelMode = "details";
   /** 额度详情面板是否处于前台可见（用于用量条二次点击关闭） */
   private detailsVisible = false;
   private readonly disposables: vscode.Disposable[] = [];
@@ -69,6 +85,10 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
       webviewView.onDidChangeVisibility(() => {
         if (!webviewView.visible) {
           this.detailsVisible = false;
+          // 用户直接收起面板 = 放弃这次输入
+          if (this.mode === "prompt") {
+            void this.settlePrompt(undefined);
+          }
         } else if (this.mode === "details") {
           this.detailsVisible = true;
         }
@@ -83,6 +103,15 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
           if (actionId) {
             await this.onMenuAction(actionId);
           }
+          return;
+        }
+        if (type === "promptSubmit") {
+          const value = (message as { value?: string }).value;
+          await this.settlePrompt(typeof value === "string" ? value : undefined);
+          return;
+        }
+        if (type === "promptCancel") {
+          await this.settlePrompt(undefined);
           return;
         }
         if (type === "runCommand") {
@@ -111,6 +140,48 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
     await this.revealAndRender("Agent 用量");
     this.detailsVisible = true;
     return true;
+  }
+
+  /**
+   * 在面板内联询问一段输入，替代 vscode.window.showInputBox。
+   * showInputBox 永远弹在窗口顶部，离用户操作的位置很远；这里就地询问。
+   * @returns 用户输入的字符串；取消返回 undefined
+   */
+  async askInput(options: PanelPromptOptions): Promise<string | undefined> {
+    // 同一时刻只允许一个内联输入；新的请求先把旧的以取消结算
+    this.promptResolve?.(undefined);
+
+    this.modeBeforePrompt = this.mode === "prompt" ? this.modeBeforePrompt : this.mode;
+    this.mode = "prompt";
+    this.promptOptions = options;
+    this.detailsVisible = false;
+    await this.revealAndRender(options.title);
+
+    // 面板始终没能创建出来时不能干等：Promise 永不 resolve 会让
+    // 导入/重命名整条流程静默卡死，用户看不到任何反馈。
+    if (!this.view) {
+      this.mode = this.modeBeforePrompt;
+      this.promptOptions = undefined;
+      void vscode.window.showWarningMessage("无法打开账号面板，操作已取消。请先展开底部「Agent 用量」面板后重试。");
+      return undefined;
+    }
+
+    return new Promise<string | undefined>((resolve) => {
+      this.promptResolve = resolve;
+    });
+  }
+
+  /** 结算内联输入并回到进入前的模式 */
+  private async settlePrompt(value: string | undefined): Promise<void> {
+    const resolve = this.promptResolve;
+    this.promptResolve = undefined;
+    this.promptOptions = undefined;
+    this.mode = this.modeBeforePrompt;
+    // 必须重绘：否则提交后那张已失效的输入卡片会一直留在面板上
+    if (this.view) {
+      this.view.webview.html = this.renderHtml();
+    }
+    resolve?.(value);
   }
 
   async showMenu(actions: ManageMenuAction[]): Promise<void> {
@@ -150,6 +221,9 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   }
 
   private renderHtml(): string {
+    if (this.mode === "prompt") {
+      return this.wrapDocument(this.renderPromptBody(), this.promptOptions?.title ?? "输入");
+    }
     if (this.mode === "menu") {
       return this.wrapDocument(this.renderMenuBody(), "账号操作");
     }
@@ -250,6 +324,57 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
       opacity: 0.75;
       font-size: 12px;
     }
+    .prompt-card {
+      max-width: 520px;
+    }
+    .prompt-input {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 8px 0 4px;
+      padding: 6px 8px;
+      font: inherit;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, rgba(127,127,127,0.4)));
+      border-radius: 4px;
+    }
+    .prompt-input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      border-color: var(--vscode-focusBorder);
+    }
+    .prompt-input.invalid {
+      border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+    }
+    .prompt-error {
+      min-height: 16px;
+      font-size: 12px;
+      color: var(--vscode-inputValidation-errorBorder, #f14c4c);
+    }
+    .prompt-actions {
+      display: flex;
+      gap: 8px;
+      margin: 6px 0 4px;
+    }
+    .prompt-btn {
+      padding: 4px 14px;
+      font: inherit;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid var(--vscode-widget-border, rgba(127,127,127,0.3));
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    }
+    .prompt-btn.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: transparent;
+    }
+    .prompt-btn:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+    }
+    .small {
+      font-size: 11px;
+    }
     a.cmd {
       color: var(--vscode-textLink-foreground);
       cursor: pointer;
@@ -287,6 +412,61 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   ${body}
   <script>
     const vscode = acquireVsCodeApi();
+
+    // ---- 面板内联输入 ----
+    // 校验在这里现算：showInputBox 的 validateInput 跑在扩展侧，
+    // 换成 webview 后必须在这里重实现，否则非法值会一路传到扩展。
+    const promptInput = document.getElementById('prompt-input');
+    if (promptInput) {
+      const errEl = document.getElementById('prompt-error');
+      const okBtn = document.getElementById('prompt-ok');
+      const cancelBtn = document.getElementById('prompt-cancel');
+
+      const validate = () => {
+        const raw = promptInput.value;
+        if (promptInput.hasAttribute('data-numeric')) {
+          const t = raw.trim();
+          if (!t) return '不能为空';
+          const n = Number(t);
+          if (!Number.isFinite(n)) return '请输入有效数字';
+          if (promptInput.hasAttribute('data-integer') && !Number.isInteger(n)) return '请输入整数';
+          const min = promptInput.getAttribute('data-min');
+          const max = promptInput.getAttribute('data-max');
+          if (min !== null && n < Number(min)) return '不能小于 ' + min;
+          if (max !== null && n > Number(max)) return '不能大于 ' + max;
+          return undefined;
+        }
+        if (!raw.trim()) return '不能为空';
+        return undefined;
+      };
+
+      const refresh = () => {
+        const msg = validate();
+        errEl.textContent = msg || '';
+        promptInput.classList.toggle('invalid', Boolean(msg));
+        okBtn.disabled = Boolean(msg);
+        return !msg;
+      };
+
+      const submit = () => {
+        if (!refresh()) return;
+        vscode.postMessage({ type: 'promptSubmit', value: promptInput.value.trim() });
+      };
+      const cancel = () => vscode.postMessage({ type: 'promptCancel' });
+
+      promptInput.addEventListener('input', refresh);
+      promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      });
+      okBtn.addEventListener('click', submit);
+      cancelBtn.addEventListener('click', cancel);
+
+      refresh();
+      promptInput.focus();
+      promptInput.select();
+    }
+
     document.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -315,6 +495,28 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   </script>
 </body>
 </html>`;
+  }
+
+  private renderPromptBody(): string {
+    const o = this.promptOptions;
+    if (!o) {
+      return `<div class="empty">没有待输入的内容</div>`;
+    }
+    const numeric = o.numeric
+      ? ` data-numeric="1"${o.numeric.min !== undefined ? ` data-min="${o.numeric.min}"` : ""}${o.numeric.max !== undefined ? ` data-max="${o.numeric.max}"` : ""}${o.numeric.integer ? ` data-integer="1"` : ""}`
+      : "";
+    return `<div class="card prompt-card">
+      <div class="row muted">${escapeHtml(o.prompt)}</div>
+      <input id="prompt-input" class="prompt-input" type="text"
+        value="${escapeHtml(o.value ?? "")}"
+        placeholder="${escapeHtml(o.placeholder ?? "")}"${numeric} />
+      <div id="prompt-error" class="prompt-error"></div>
+      <div class="prompt-actions">
+        <button type="button" id="prompt-ok" class="prompt-btn primary">${escapeHtml(o.confirmLabel ?? "确定")}</button>
+        <button type="button" id="prompt-cancel" class="prompt-btn">取消</button>
+      </div>
+      <div class="row muted small">回车确认 · Esc 取消</div>
+    </div>`;
   }
 
   private renderMenuBody(): string {
@@ -420,6 +622,11 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
   }
 
   dispose(): void {
+    // 未结算的内联输入必须在这里以取消收尾，
+    // 否则等待它的 await 会永远挂着（导入/重命名流程静默卡死）
+    this.promptResolve?.(undefined);
+    this.promptResolve = undefined;
+    this.promptOptions = undefined;
     for (const d of this.disposables) {
       d.dispose();
     }
