@@ -2,6 +2,12 @@
 
 所有显著变更都记录在此文件中。
 
+## [0.0.80] - 2026-08-05
+
+### Changed
+
+- 新增 Claude Code 5h / 7d 剩余用量显示：状态栏三段（CC · Codex · Grok，均只显 7d），tooltip 与底部面板显示 5h 与 7d 及重置倒计时。只读读取本机 CC 登录（macOS Keychain 优先，回退 ~/.claude/.credentials.json），不存凭据、不切账号、不参与自动切号。失败一律显式占位，绝不显示伪造的额度数字。
+
 ## [0.0.79] - 2026-08-05
 
 ### Changed

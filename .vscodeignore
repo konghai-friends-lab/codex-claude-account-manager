@@ -6,7 +6,7 @@ nul
 src/**
 test/**
 scripts/**
-docs/plans/**
+docs/**
 node_modules/**
 tsconfig.json
 package-lock.json
