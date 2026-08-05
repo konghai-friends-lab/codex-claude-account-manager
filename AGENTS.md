@@ -21,7 +21,8 @@ Secret Storage，刷新额度，并将所选账号写回 Codex 本地的 `auth.j
 | `src/grokAuth.ts` | 本机 Grok `auth.json` 只读解析（不写回、不进 SecretStorage）。 |
 | `src/grokQuotaClient.ts` | Grok Build 周期剩余（billing credits）请求与解析。 |
 | `src/tokenRecovery.ts` | refresh token 刷新流程及认证数据标准化。 |
-| `src/statusBar.ts` | 状态栏项目与 Markdown 悬停提示渲染。 |
+| `src/statusBar.ts` | 状态栏用量段 + 菜单 icon（左键进底部面板）。 |
+| `src/bottomPanel.ts` | 底部 Panel Webview：额度详情与账号操作菜单。 |
 | `src/accountPresentation.ts` | 纯额度计算、排序与展示辅助函数。 |
 | `src/accountHealth.ts` | 账号健康度判断与 Markdown 报告生成。 |
 | `src/accountBundle.ts` | 版本化账号配置包的序列化与防御性解析。 |
@@ -65,6 +66,11 @@ npm run compile
 - 保持 `package.json`、`manager.ts` 与 `README.md` 中的 UI 文案和配置键一致。
 - 每个用户可调用命令都要在 `package.json` 中声明 command contribution。
 - 发布时保持 `package.json` 版本、发布说明/README 与 VSIX 包一致。
+- 版本唯一真相源是 `package.json` 的 `version`。发测试/正式包用：
+  - `npm run version:current` 查看当前版本与将生成的 VSIX 名
+  - `npm run release -- patch --notes "变更说明"`（推荐：先 bump 再打包）
+  - `npm run vsix` 仅按当前版本打包；同版本 `.vsix` 已存在时拒绝覆盖，需 `--force`
+  - 禁止手工改版本后仍用旧号打包；`*.vsix` 不提交仓库
 - 避免无关的格式化噪声；不要手工编辑 `node_modules/`、`out/` 或 `*.vsix`。
 
 ## 升级与开源检查清单

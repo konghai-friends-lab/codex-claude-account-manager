@@ -17,6 +17,7 @@ import {
 import { AccountHealthCheck, evaluateAccountHealth, renderAccountHealthMarkdown } from "./accountHealth";
 import { clearCodexAuthFile, getDefaultCodexAuthPath, getDefaultCodexSessionsPath, loadAuthDataFromFile, syncCodexAuthFile } from "./auth";
 
+import { BottomPanelController, ManageMenuAction } from "./bottomPanel";
 import { loadGrokAuthFromFile } from "./grokAuth";
 import { GrokQuotaClient } from "./grokQuotaClient";
 import { CodexQuotaClient } from "./quotaClient";
@@ -123,6 +124,7 @@ export class CodexAccountManager implements vscode.Disposable {
 
   private readonly store: AccountStore;
   private readonly statusBar: StatusBarController;
+  private readonly bottomPanel: BottomPanelController;
   private readonly outputChannel: vscode.OutputChannel;
   private readonly disposables: vscode.Disposable[] = [];
 
@@ -140,14 +142,31 @@ export class CodexAccountManager implements vscode.Disposable {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.store = new AccountStore(context);
     this.statusBar = new StatusBarController(context);
+    this.bottomPanel = new BottomPanelController(
+      context.extensionUri,
+      (actionId) => this.runManageAction(actionId as ManageActionItem["action"]),
+      async (command, args) => {
+        if (args && args.length > 0) {
+          await vscode.commands.executeCommand(command, ...args);
+          return;
+        }
+        await vscode.commands.executeCommand(command);
+      },
+    );
     this.outputChannel = vscode.window.createOutputChannel("Codex Account Manager");
-    this.disposables.push(this.outputChannel);
+    this.disposables.push(this.outputChannel, this.bottomPanel);
   }
 
 
   async activate(): Promise<void> {
     this.statusBar.showLoading();
     this.tsLog("activate:start");
+
+    this.disposables.push(
+      vscode.window.registerWebviewViewProvider(BottomPanelController.viewType, this.bottomPanel, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+    );
 
     this.registerCommands();
     this.disposables.push(
@@ -276,6 +295,7 @@ export class CodexAccountManager implements vscode.Disposable {
   private registerCommands(): void {
     this.disposables.push(
       vscode.commands.registerCommand("codexAccountManager.manageAccounts", () => this.manageAccounts()),
+      vscode.commands.registerCommand("codexAccountManager.showQuotaDetails", () => this.showQuotaDetails()),
       vscode.commands.registerCommand("codexAccountManager.importCurrentAuth", () => this.importCurrentAuth()),
       vscode.commands.registerCommand("codexAccountManager.importAuthFile", () => this.importAuthFile()),
       vscode.commands.registerCommand("codexAccountManager.openCurrentAuthPath", () => this.openCurrentAuthPath()),
@@ -1041,9 +1061,37 @@ export class CodexAccountManager implements vscode.Disposable {
     }
   }
 
+  /**
+   * 状态栏用量条左键：打开额度详情（布局对齐原先气泡：额度一览 + 账号列表 + 精简操作）。
+   * 同时写入 StatusBarItem.tooltip，悬停也能看到同款内容。
+   */
+  private async showQuotaDetails(): Promise<void> {
+    await this.refreshStatusBar();
+    const { accounts, activeAccountId } = await this.loadAccountContext();
+    const ordered = this.statusBar.getOrderedAccounts(accounts, activeAccountId);
+    await this.bottomPanel.showDetails({
+      accounts: ordered,
+      activeAccountId,
+      showEmail: this.showEmailInTooltip,
+      notice: this.externalAuthNotice,
+      grokSnapshot: this.grokSnapshot,
+      sortByLabel: this.statusBar.getSortByLabel(),
+      sortOrderLabel: this.statusBar.getSortOrderLabel(),
+    });
+  }
+
+  /** 状态栏菜单 icon：底部面板展示操作列表 */
   private async manageAccounts(): Promise<void> {
+    const items = await this.buildManageActionItems();
+    const menuActions: ManageMenuAction[] = items.map((item) => ({
+      id: item.action,
+      label: item.label.replace(/^\$\([^)]+\)\s*/, ""),
+      description: item.description,
+    }));
+    await this.bottomPanel.showMenu(menuActions);
+  }
 
-
+  private async buildManageActionItems(): Promise<ManageActionItem[]> {
     const { accounts, activeAccountId } = await this.loadAccountContext();
     const lastAccountId = await this.store.getLastAccountId();
     const activeAccount = this.findActiveAccount(accounts, activeAccountId);
@@ -1071,7 +1119,6 @@ export class CodexAccountManager implements vscode.Disposable {
       },
       {
         label: "$(export) 导出账号配置包",
-
         description: "导出已保存账号和令牌，便于备份或迁移",
         action: "export-bundle",
       },
@@ -1100,20 +1147,14 @@ export class CodexAccountManager implements vscode.Disposable {
         description: "刷新间隔、自动切号阈值、超时时间等",
         action: "settings",
       },
-
-
-
-
     ];
 
     if (accounts.length > 0) {
-      items.push(
-        {
-          label: "$(account) 切换当前账号",
-          description: activeAccount ? `当前：${activeAccount.name}` : "当前未选择账号",
-          action: "switch",
-        },
-      );
+      items.push({
+        label: "$(account) 切换当前账号",
+        description: activeAccount ? `当前：${activeAccount.name}` : "当前未选择账号",
+        action: "switch",
+      });
 
       if (lastAccount && lastAccount.id !== activeAccountId) {
         items.push({
@@ -1124,13 +1165,11 @@ export class CodexAccountManager implements vscode.Disposable {
       }
 
       items.push(
-
         {
           label: "$(edit) 重命名账号",
           description: "修改展示名称",
           action: "rename",
         },
-
         {
           label: "$(trash) 删除账号",
           description: "移除本地保存的账号与额度缓存",
@@ -1139,15 +1178,11 @@ export class CodexAccountManager implements vscode.Disposable {
       );
     }
 
-    const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: "选择要执行的 Codex 账号操作",
-    });
+    return items;
+  }
 
-    if (!picked) {
-      return;
-    }
-
-    switch (picked.action) {
+  private async runManageAction(action: ManageActionItem["action"]): Promise<void> {
+    switch (action) {
       case "import-current":
         await this.importCurrentAuth();
         break;
@@ -1178,11 +1213,9 @@ export class CodexAccountManager implements vscode.Disposable {
       case "login-new":
         await this.loginNewAccount();
         break;
-
       case "rename":
         await this.renameAccount();
         break;
-
       case "remove":
         await this.removeAccount();
         break;

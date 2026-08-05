@@ -2,9 +2,14 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  formatClaudeCodeCompactPlaceholder,
+  formatCodexCompactSegment,
+  formatCompactProgressChip,
+  formatGrokCompactProgressChip,
   formatGrokCompactSegment,
   formatGrokPlaceholder,
   formatGrokQuotaProgress,
+  formatStatusBarQuotaLine,
   getGrokResetAfterSeconds,
 } = require("../out/accountPresentation");
 
@@ -85,18 +90,65 @@ test("getGrokResetAfterSeconds 优先 periodEndAt 现算", () => {
   assert.equal(seconds, 3600);
 });
 
-test("Codex 未登录状态栏文案形态（拼串约定）", () => {
-  // statusBar 使用固定前缀 + formatGrokCompactSegment
-  const grok = formatGrokCompactSegment({
-    window: { usedPercent: 49, availablePercent: 51 },
+test("formatCodexCompactSegment 用产品名 codex 而非账号名", () => {
+  const text = formatCodexCompactSegment("7d", {
+    usedPercent: 19,
+    availablePercent: 81,
+  });
+  assert.match(text, /^codex 7d /);
+  assert.match(text, /81%/);
+  assert.doesNotMatch(text, /@|用户/);
+});
+
+test("formatClaudeCodeCompactPlaceholder 5h/7d 占位", () => {
+  assert.equal(formatClaudeCodeCompactPlaceholder(), "CC 5h — · CC 7d —");
+});
+
+test("formatCompactProgressChip 无标题仅进度", () => {
+  assert.equal(formatCompactProgressChip(undefined, true), "⬜—");
+  const chip = formatCompactProgressChip({ usedPercent: 19, availablePercent: 81 });
+  assert.match(chip, /81%/);
+  assert.doesNotMatch(chip, /codex|CC|Grok|7d|5h/i);
+});
+
+test("formatGrokCompactProgressChip 无 Grok 前缀", () => {
+  const chip = formatGrokCompactProgressChip({
+    window: { usedPercent: 56, availablePercent: 44 },
     periodLabel: "7d",
     fetchedAt: "2026-08-05T00:00:00.000Z",
   });
-  const offlineText = `$(account) Codex 未登录 · ${grok}`;
-  assert.match(offlineText, /Codex 未登录/);
-  assert.match(offlineText, /Grok 7d/);
-  assert.match(offlineText, /51%/);
+  assert.match(chip, /44%/);
+  assert.doesNotMatch(chip, /Grok|7d/);
+  assert.equal(formatGrokCompactProgressChip(undefined), "⬜—");
+});
 
-  const noticeText = `$(warning) 检测到新账号 · ${formatGrokPlaceholder("未登录")}`;
-  assert.match(noticeText, /Grok 未登录/);
+test("状态栏极简行：CC · Codex · Grok，仅 7d，无标题", () => {
+  const line = formatStatusBarQuotaLine(
+    {
+      primary: { usedPercent: 90, availablePercent: 10 },
+      secondary: { usedPercent: 23, availablePercent: 77 },
+      fetchedAt: "2026-08-05T00:00:00.000Z",
+    },
+    {
+      window: { usedPercent: 56, availablePercent: 44 },
+      periodLabel: "7d",
+      fetchedAt: "2026-08-05T00:00:00.000Z",
+    },
+  );
+  // 顺序 CC · Codex(7d=77) · Grok；不用 5h=10
+  assert.equal(line, "⬜— · 🟩77% · 🟨44%");
+  assert.doesNotMatch(line, /codex|CC|Grok|5h|10%/i);
+});
+
+test("状态栏极简行：codex 不可用", () => {
+  const line = formatStatusBarQuotaLine(
+    undefined,
+    {
+      window: { usedPercent: 0, availablePercent: 100 },
+      periodLabel: "7d",
+      fetchedAt: "2026-08-05T00:00:00.000Z",
+    },
+    { codexUnavailable: true },
+  );
+  assert.equal(line, "⬜— · ⬜— · 🟩100%");
 });

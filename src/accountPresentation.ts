@@ -191,6 +191,79 @@ export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefine
     : `Grok ${icon}${percentage}`;
 }
 
+/**
+ * Claude Code 额度占位（尚未接入真实数据）。
+ * 详情面板等较长场景：`CC 5h — · CC 7d —`
+ */
+export function formatClaudeCodeCompactPlaceholder(): string {
+  return "CC 5h — · CC 7d —";
+}
+
+/**
+ * 状态栏极简进度芯片：色块 + 百分比，无产品名/窗口标签。
+ * 例：`🟩77%` / `⬜—`
+ */
+export function formatCompactProgressChip(
+  window: QuotaWindow | undefined,
+  unavailable = false,
+): string {
+  if (unavailable || !window) {
+    return `${getQuotaToneIcon(undefined)}—`;
+  }
+  const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+  return `${getQuotaToneIcon(window)}${percentage}`;
+}
+
+/**
+ * Grok 状态栏极简芯片（无 “Grok/7d” 前缀）。
+ * 有数据：`🟨44%`；不可用：`⬜—`
+ */
+export function formatGrokCompactProgressChip(
+  snapshot: GrokPeriodSnapshot | undefined,
+): string {
+  if (!snapshot?.window || snapshot.error) {
+    return formatCompactProgressChip(undefined, true);
+  }
+  return formatCompactProgressChip(snapshot.window);
+}
+
+/**
+ * 状态栏多产品极简行（仅 7d，顺序 CC · Codex · Grok，无标题）。
+ * 例：`⬜— · 🟩77% · 🟨44%`
+ */
+export function formatStatusBarQuotaLine(
+  quota: QuotaSnapshot | undefined,
+  grokSnapshot: GrokPeriodSnapshot | undefined,
+  options?: { codexUnavailable?: boolean },
+): string {
+  // CC 尚未接入：单芯片占位（只表示 7d）
+  const ccChip = formatCompactProgressChip(undefined, true);
+  // Codex 固定用 secondary（7d），不再混显 5h
+  const codexUnavailable = Boolean(options?.codexUnavailable) || !quota?.secondary;
+  const codexChip = formatCompactProgressChip(quota?.secondary, codexUnavailable);
+  const grokChip = formatGrokCompactProgressChip(grokSnapshot);
+  return `${ccChip} · ${codexChip} · ${grokChip}`;
+}
+
+/** Codex 产品紧凑段：`codex 7d 🟩81%`（不用账号名；详情/旧样式） */
+export function formatCodexCompactSegment(
+  windowLabel: "5h" | "7d" | undefined,
+  window: QuotaWindow | undefined,
+  unavailable = false,
+): string {
+  if (unavailable || !window) {
+    if (windowLabel) {
+      return `codex ${windowLabel} —`;
+    }
+    return "codex —";
+  }
+  const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+  const icon = getQuotaToneIcon(window);
+  return windowLabel
+    ? `codex ${windowLabel} ${icon}${percentage}`
+    : `codex ${icon}${percentage}`;
+}
+
 /** 悬停用 Grok 额度行（进度条风格，与 Codex 一致） */
 export function formatGrokQuotaProgress(snapshot: GrokPeriodSnapshot | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {
   if (!snapshot?.window || snapshot.error) {

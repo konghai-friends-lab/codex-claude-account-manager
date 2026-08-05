@@ -129,11 +129,20 @@ function coerceUsagePercent(raw: unknown): number | undefined {
 }
 
 /**
- * 只接受 GrokBuild 产品用量；不再回退 overall credits（避免误标为 Build 剩余）。
+ * 周期已用百分比，对齐 Grok TUI `/usage` 的「Weekly limit」。
+ *
+ * 优先 `creditUsagePercent`（总周额度，与 /usage 一致）；
+ * 缺失时再回退 `productUsage[GrokBuild].usagePercent`。
+ * 注意：GrokBuild 分项用量往往略低于总周额度（其它产品也会占周额度）。
  */
 function pickUsagePercent(config: BillingConfig | undefined): { usedPercent: number; product?: string } | undefined {
   if (!config) {
     return undefined;
+  }
+
+  const overall = coerceUsagePercent(config.creditUsagePercent ?? config.credit_usage_percent);
+  if (overall !== undefined) {
+    return { usedPercent: overall, product: "weekly" };
   }
 
   const products = config.productUsage ?? config.product_usage ?? [];
@@ -163,7 +172,7 @@ export function parseBillingConfigToSnapshot(
     return {
       fetchedAt,
       statusCode,
-      error: "未从 Grok billing 解析到 GrokBuild 周期用量",
+      error: "未从 Grok billing 解析到周期用量",
     };
   }
 

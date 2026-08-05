@@ -31,7 +31,7 @@ test("periodLabelFromType: 按窗口分钟数推断约 7 天", () => {
   assert.equal(periodLabelFromType(undefined, 10_080), "7d");
 });
 
-test("解析 GrokBuild productUsage 与 weekly 周期", () => {
+test("优先 creditUsagePercent（对齐 /usage Weekly limit），而非 GrokBuild 分项", () => {
   const snapshot = parseBillingConfigToSnapshot(
     {
       currentPeriod: {
@@ -39,9 +39,9 @@ test("解析 GrokBuild productUsage 与 weekly 周期", () => {
         start: "2026-07-30T08:48:32.427135+00:00",
         end: "2026-08-06T08:48:32.427135+00:00",
       },
-      creditUsagePercent: 50.0,
+      creditUsagePercent: 52.0,
       productUsage: [
-        { product: "GrokBuild", usagePercent: 49.0 },
+        { product: "GrokBuild", usagePercent: 51.0 },
         { product: "GrokChat", usagePercent: 1.0 },
       ],
     },
@@ -53,24 +53,37 @@ test("解析 GrokBuild productUsage 与 weekly 周期", () => {
   assert.equal(snapshot.error, undefined);
   assert.equal(snapshot.statusCode, 200);
   assert.equal(snapshot.periodLabel, "7d");
-  assert.equal(snapshot.product, "GrokBuild");
-  assert.equal(snapshot.window?.usedPercent, 49);
-  assert.equal(snapshot.window?.availablePercent, 51);
+  assert.equal(snapshot.product, "weekly");
+  // /usage Weekly limit 52% 已用 → 剩余 48%
+  assert.equal(snapshot.window?.usedPercent, 52);
+  assert.equal(snapshot.window?.availablePercent, 48);
   assert.equal(snapshot.window?.windowMinutes, 10_080);
   assert.ok(snapshot.periodEndAt);
   assert.equal(typeof snapshot.window?.resetAfterSeconds, "number");
 });
 
-test("仅有 overall creditUsagePercent 时不伪装为 GrokBuild", () => {
+test("无 creditUsagePercent 时回退 GrokBuild 分项", () => {
   const snapshot = parseBillingConfigToSnapshot(
-    { creditUsagePercent: 70 },
+    {
+      productUsage: [{ product: "GrokBuild", usagePercent: 30 }],
+    },
     "2026-08-05T00:00:00.000Z",
     200,
   );
-  assert.ok(snapshot.error);
-  assert.match(snapshot.error, /GrokBuild/);
-  assert.equal(snapshot.window, undefined);
-  assert.equal(snapshot.statusCode, 200);
+  assert.equal(snapshot.window?.usedPercent, 30);
+  assert.equal(snapshot.window?.availablePercent, 70);
+  assert.equal(snapshot.product, "GrokBuild");
+});
+
+test("仅有 creditUsagePercent 时可用", () => {
+  const snapshot = parseBillingConfigToSnapshot(
+    { creditUsagePercent: 52 },
+    "2026-08-05T00:00:00.000Z",
+    200,
+  );
+  assert.equal(snapshot.window?.usedPercent, 52);
+  assert.equal(snapshot.window?.availablePercent, 48);
+  assert.equal(snapshot.product, "weekly");
 });
 
 test("无周期用量时返回 error，不伪造 0%", () => {
