@@ -39,6 +39,11 @@ export interface GrokPeriodSnapshot {
   periodLabel?: string;
   /** 产品标识，如 GrokBuild */
   product?: string;
+  /**
+   * 周期结束绝对时间（ISO）。
+   * 展示重置倒计时应以本字段现算，避免冻结 resetAfterSeconds。
+   */
+  periodEndAt?: string;
   fetchedAt: string;
   statusCode?: number;
   /** 不可用原因（未登录 / 解析失败 / 网络错误等），供占位展示 */

@@ -5,6 +5,7 @@ import {
   formatGrokQuotaProgress,
   formatQuotaPercentage,
   formatQuotaSummary,
+  getGrokResetAfterSeconds,
   getQuotaAvailablePercent,
   getQuotaToneIcon,
 } from "./accountPresentation";
@@ -229,6 +230,28 @@ function formatTooltipTitle(account: AccountProfile, showEmail: boolean, nameOve
   return titleBits.join(" · ");
 }
 
+function formatResetFromSeconds(totalSeconds: number | undefined): string | undefined {
+  if (totalSeconds === undefined) {
+    return undefined;
+  }
+  const seconds = Math.max(0, totalSeconds);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  const parts: string[] = [];
+  if (days > 0) {
+    parts.push(`${days}天`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours}小时`);
+  }
+  if (minutes > 0 || parts.length === 0) {
+    parts.push(`${minutes}分钟`);
+  }
+  return parts.join("");
+}
+
 function formatGrokTooltipBlock(snapshot: GrokPeriodSnapshot | undefined): string {
   const lines: string[] = [];
   lines.push(`**Grok** · ${formatGrokCompactSegment(snapshot)}  \n`);
@@ -236,7 +259,8 @@ function formatGrokTooltipBlock(snapshot: GrokPeriodSnapshot | undefined): strin
 
   const details: string[] = [];
   if (snapshot?.window) {
-    const reset = formatReset(snapshot.window);
+    // 优先 periodEndAt 现算，避免冻结 resetAfterSeconds（审查 #7）
+    const reset = formatResetFromSeconds(getGrokResetAfterSeconds(snapshot));
     if (reset) {
       const label = snapshot.periodLabel ? `${snapshot.periodLabel} 重置` : "重置";
       details.push(`${label} ${reset}`);
@@ -571,7 +595,8 @@ export class StatusBarController implements vscode.Disposable {
     const grokSegment = formatGrokCompactSegment(grokSnapshot);
 
     if (noticeText) {
-      item.text = `${getNoticeIcon(notice)} ${noticeText}${invisibleRefreshMarker}`;
+      // 外部 auth 通知时仍保留 Grok peer 段（审查 #1 / KTD5）
+      item.text = `${getNoticeIcon(notice)} ${noticeText} · ${grokSegment}${invisibleRefreshMarker}`;
       item.tooltip = this.buildTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot);
       return;
     }

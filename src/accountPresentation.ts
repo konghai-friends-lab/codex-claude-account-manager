@@ -156,15 +156,20 @@ export function formatQuotaBadge(label: string, window: QuotaWindow | undefined)
   return `${label} ${getQuotaToneIcon(window)} ${formatQuotaPercentage(window)}`;
 }
 
-/** 状态栏 Grok 占位：始终带 Grok 标记 */
+/** 状态栏 Grok 占位：始终带 Grok 标记；常见失败用短后缀 */
 export function formatGrokPlaceholder(reason?: string): string {
   const detail = reason?.trim();
   if (!detail) {
     return "Grok —";
   }
-  // 状态栏保持短；常见未登录单独压缩
   if (/未登录|no login|not logged/i.test(detail)) {
     return "Grok 未登录";
+  }
+  if (/HTTP 401|HTTP 403|鉴权|unauthorized/i.test(detail)) {
+    return "Grok 鉴权失败";
+  }
+  if (/超时|timeout/i.test(detail)) {
+    return "Grok 超时";
   }
   return "Grok —";
 }
@@ -189,10 +194,29 @@ export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefine
 /** 悬停用 Grok 额度行（进度条风格，与 Codex 一致） */
 export function formatGrokQuotaProgress(snapshot: GrokPeriodSnapshot | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {
   if (!snapshot?.window || snapshot.error) {
-    return `Grok ${snapshot?.error?.trim() ? "暂不可用" : "暂不可用"}`;
+    return "Grok 暂不可用";
   }
   const label = snapshot.periodLabel ? `Grok ${snapshot.periodLabel}` : "Grok";
   return formatQuotaProgress(label, snapshot.window, barLength);
+}
+
+/**
+ * 从 Grok 快照现算重置剩余秒数（优先 periodEndAt，避免冻结的 resetAfterSeconds）。
+ */
+export function getGrokResetAfterSeconds(snapshot: GrokPeriodSnapshot | undefined, nowMs = Date.now()): number | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshot.periodEndAt) {
+    const endMs = Date.parse(snapshot.periodEndAt);
+    if (Number.isFinite(endMs)) {
+      return Math.max(0, Math.round((endMs - nowMs) / 1000));
+    }
+  }
+  if (snapshot.window?.resetAfterSeconds !== undefined) {
+    return Math.max(0, snapshot.window.resetAfterSeconds);
+  }
+  return undefined;
 }
 
 export function formatQuotaProgress(label: string, window: QuotaWindow | undefined, barLength = DEFAULT_QUOTA_BAR_LENGTH): string {

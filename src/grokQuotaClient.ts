@@ -36,41 +36,71 @@ interface BillingResponse {
   config?: BillingConfig;
 }
 
+export interface GrokBillingFetchResult {
+  body: string;
+  statusCode: number;
+}
+
+/** HTTP 失败时携带 statusCode，便于写入 snapshot */
+export class GrokBillingHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, detail?: string) {
+    const suffix = detail?.trim() ? `: ${detail.trim().slice(0, 200)}` : "";
+    super(`Grok billing HTTP ${statusCode}${suffix}`);
+    this.name = "GrokBillingHttpError";
+    this.statusCode = statusCode;
+  }
+}
+
 const GROK_BUILD_PRODUCT = "GrokBuild";
 const BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
 
-/** 周期类型 → 展示标签；未知时返回 undefined（不硬编码假 7d） */
-export function periodLabelFromType(periodType: string | undefined, windowMinutes?: number): string | undefined {
-  const normalized = (periodType ?? "").toUpperCase();
-  if (normalized.includes("WEEKLY") || normalized.includes("WEEK")) {
+function periodLabelFromWindowMinutes(windowMinutes: number | undefined): string | undefined {
+  if (windowMinutes === undefined || !Number.isFinite(windowMinutes) || windowMinutes <= 0) {
+    return undefined;
+  }
+  if (windowMinutes >= 6 * 24 * 60 && windowMinutes <= 8 * 24 * 60) {
     return "7d";
   }
-  if (normalized.includes("MONTHLY") || normalized.includes("MONTH")) {
+  if (windowMinutes >= 28 * 24 * 60 && windowMinutes <= 32 * 24 * 60) {
     return "30d";
   }
-  if (normalized.includes("DAILY") || normalized.includes("DAY")) {
+  if (windowMinutes >= 23 * 60 && windowMinutes <= 25 * 60) {
+    return "1d";
+  }
+  if (windowMinutes < 24 * 60) {
+    const hours = Math.max(1, Math.round(windowMinutes / 60));
+    return `${hours}h`;
+  }
+  const days = Math.max(1, Math.round(windowMinutes / (24 * 60)));
+  return `${days}d`;
+}
+
+/**
+ * 周期类型 → 展示标签。
+ * 优先匹配已知枚举（WEEKLY/MONTHLY/DAILY），避免 BIWEEKLY 等子串误伤。
+ */
+export function periodLabelFromType(periodType: string | undefined, windowMinutes?: number): string | undefined {
+  const normalized = (periodType ?? "").toUpperCase();
+
+  // 复合周期先交给窗口时长，避免 includes("WEEK") 误伤 BIWEEKLY
+  if (normalized.includes("BIWEEKLY") || normalized.includes("BIMONTHLY") || normalized.includes("FORTNIGHT")) {
+    return periodLabelFromWindowMinutes(windowMinutes);
+  }
+
+  if (normalized.includes("WEEKLY") || /(?:^|_)WEEK(?:_|$)/.test(normalized)) {
+    return "7d";
+  }
+  if (normalized.includes("MONTHLY") || /(?:^|_)MONTH(?:_|$)/.test(normalized)) {
+    return "30d";
+  }
+  if (normalized.includes("DAILY") || /(?:^|_)DAY(?:_|$)/.test(normalized)) {
     return "1d";
   }
 
-  if (windowMinutes !== undefined && Number.isFinite(windowMinutes) && windowMinutes > 0) {
-    if (windowMinutes >= 6 * 24 * 60 && windowMinutes <= 8 * 24 * 60) {
-      return "7d";
-    }
-    if (windowMinutes >= 28 * 24 * 60 && windowMinutes <= 32 * 24 * 60) {
-      return "30d";
-    }
-    if (windowMinutes >= 23 * 60 && windowMinutes <= 25 * 60) {
-      return "1d";
-    }
-    if (windowMinutes < 24 * 60) {
-      const hours = Math.max(1, Math.round(windowMinutes / 60));
-      return `${hours}h`;
-    }
-    const days = Math.max(1, Math.round(windowMinutes / (24 * 60)));
-    return `${days}d`;
-  }
-
-  return undefined;
+  return periodLabelFromWindowMinutes(windowMinutes);
 }
 
 function parseIsoMs(value: string | undefined): number | undefined {
@@ -81,6 +111,26 @@ function parseIsoMs(value: string | undefined): number | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
+function coerceUsagePercent(raw: unknown): number | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    // 0–1 小数按比例缩放；0–100 原样
+    if (raw >= 0 && raw <= 1) {
+      return clampPercent(raw * 100);
+    }
+    return clampPercent(raw);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const n = Number(raw.trim().replace(/%$/, ""));
+    if (Number.isFinite(n)) {
+      return coerceUsagePercent(n);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 只接受 GrokBuild 产品用量；不再回退 overall credits（避免误标为 Build 剩余）。
+ */
 function pickUsagePercent(config: BillingConfig | undefined): { usedPercent: number; product?: string } | undefined {
   if (!config) {
     return undefined;
@@ -88,20 +138,15 @@ function pickUsagePercent(config: BillingConfig | undefined): { usedPercent: num
 
   const products = config.productUsage ?? config.product_usage ?? [];
   const build = products.find((item) => {
-    const name = (item.product ?? "").toLowerCase();
-    return name === "grokbuild" || name === "grok_build" || name === "grok-build";
+    const name = (item.product ?? "").toLowerCase().replace(/[\s_-]+/g, "");
+    return name === "grokbuild";
   });
 
   if (build) {
-    const raw = build.usagePercent ?? build.usage_percent;
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      return { usedPercent: clampPercent(raw), product: build.product ?? GROK_BUILD_PRODUCT };
+    const used = coerceUsagePercent(build.usagePercent ?? build.usage_percent);
+    if (used !== undefined) {
+      return { usedPercent: used, product: build.product ?? GROK_BUILD_PRODUCT };
     }
-  }
-
-  const overall = config.creditUsagePercent ?? config.credit_usage_percent;
-  if (typeof overall === "number" && Number.isFinite(overall)) {
-    return { usedPercent: clampPercent(overall), product: "credits" };
   }
 
   return undefined;
@@ -111,13 +156,14 @@ export function parseBillingConfigToSnapshot(
   config: BillingConfig | undefined,
   fetchedAt: string,
   statusCode = 200,
+  nowMs = Date.now(),
 ): GrokPeriodSnapshot {
   const usage = pickUsagePercent(config);
   if (!usage) {
     return {
       fetchedAt,
       statusCode,
-      error: "未从 Grok billing 解析到周期用量",
+      error: "未从 Grok billing 解析到 GrokBuild 周期用量",
     };
   }
 
@@ -134,7 +180,7 @@ export function parseBillingConfigToSnapshot(
 
   let resetAfterSeconds: number | undefined;
   if (endMs !== undefined) {
-    resetAfterSeconds = Math.max(0, Math.round((endMs - Date.now()) / 1000));
+    resetAfterSeconds = Math.max(0, Math.round((endMs - nowMs) / 1000));
   }
 
   const availablePercent = clampPercent(100 - usage.usedPercent);
@@ -149,6 +195,7 @@ export function parseBillingConfigToSnapshot(
     window,
     periodLabel: periodLabelFromType(period?.type, windowMinutes),
     product: usage.product,
+    periodEndAt: periodEnd && endMs !== undefined ? new Date(endMs).toISOString() : undefined,
     fetchedAt,
     statusCode,
   };
@@ -164,10 +211,26 @@ export class GrokQuotaClient {
     const fetchedAt = new Date().toISOString();
 
     try {
-      const body = await this.fetchBillingCredits();
-      const data = JSON.parse(body) as BillingResponse;
-      return parseBillingConfigToSnapshot(data.config, fetchedAt, 200);
+      const { body, statusCode } = await this.fetchBillingCredits();
+      let data: BillingResponse;
+      try {
+        data = JSON.parse(body) as BillingResponse;
+      } catch {
+        return {
+          fetchedAt,
+          statusCode,
+          error: "Grok billing 响应不是合法 JSON",
+        };
+      }
+      return parseBillingConfigToSnapshot(data.config, fetchedAt, statusCode);
     } catch (error) {
+      if (error instanceof GrokBillingHttpError) {
+        return {
+          fetchedAt,
+          statusCode: error.statusCode,
+          error: error.message,
+        };
+      }
       return {
         fetchedAt,
         error: error instanceof Error ? error.message : "刷新 Grok 周期额度失败",
@@ -175,9 +238,12 @@ export class GrokQuotaClient {
     }
   }
 
-  /** 可测试注入点（与 CodexQuotaClient.fetchWhamUsage 相同约定） */
-  async fetchBillingCredits(): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
+  /**
+   * 可测试注入点。返回 body + 真实 statusCode。
+   * 失败抛 GrokBillingHttpError 或 Error。
+   */
+  async fetchBillingCredits(): Promise<GrokBillingFetchResult> {
+    return new Promise<GrokBillingFetchResult>((resolve, reject) => {
       const requestUrl = new URL(BILLING_URL);
 
       const headers: Record<string, string> = {
@@ -203,6 +269,23 @@ export class GrokQuotaClient {
         (response) => {
           let body = "";
           const statusCode = response.statusCode ?? 500;
+          let oversized = false;
+
+          const appendChunk = (chunk: string, target: "ok" | "err"): void => {
+            if (oversized) {
+              return;
+            }
+            if (target === "ok") {
+              body += chunk;
+              if (body.length > MAX_RESPONSE_BODY_BYTES) {
+                oversized = true;
+                finish(() => {
+                  request.destroy();
+                  reject(new Error("Grok billing 响应过大"));
+                });
+              }
+            }
+          };
 
           if (statusCode >= 400) {
             let errBody = "";
@@ -212,11 +295,15 @@ export class GrokQuotaClient {
                 errBody += chunk;
               }
             });
-            response.on("end", () => {
+            const rejectHttp = (): void => {
               finish(() => {
-                reject(new Error(`Grok billing HTTP ${statusCode}`));
+                // 不把完整 body 塞进错误（可能含敏感信息）；只附极短摘要
+                const snippet = errBody.replace(/\s+/g, " ").trim().slice(0, 120);
+                reject(new GrokBillingHttpError(statusCode, snippet || undefined));
               });
-            });
+            };
+            response.on("end", rejectHttp);
+            response.on("close", rejectHttp);
             response.on("error", (error) => {
               finish(() => reject(error));
             });
@@ -225,10 +312,13 @@ export class GrokQuotaClient {
 
           response.setEncoding("utf8");
           response.on("data", (chunk: string) => {
-            body += chunk;
+            appendChunk(chunk, "ok");
           });
           response.on("end", () => {
-            finish(() => resolve(body));
+            finish(() => resolve({ body, statusCode }));
+          });
+          response.on("close", () => {
+            finish(() => resolve({ body, statusCode }));
           });
           response.on("error", (error) => {
             finish(() => reject(error));

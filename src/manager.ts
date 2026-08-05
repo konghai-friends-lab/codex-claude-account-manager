@@ -2203,14 +2203,15 @@ export class CodexAccountManager implements vscode.Disposable {
     this.refreshing = true;
     await this.refreshStatusBar();
 
+    // Grok 与 Codex 并行；finally 必须 join，避免异常路径留下陈旧 Grok UI（审查 #4）
+    let grokRefresh: Promise<void> = Promise.resolve();
+
     try {
-      // Grok 与 Codex 并行刷新：Grok 失败不影响 Codex，也不参与 auto-switch
-      const grokRefresh = this.refreshGrokPeriodRemaining();
+      grokRefresh = this.refreshGrokPeriodRemaining();
 
       const accounts = await this.store.listAccounts();
       if (accounts.length === 0) {
         await grokRefresh;
-        await this.refreshStatusBar();
         if (!silent) {
           void vscode.window.showInformationMessage("还没有可刷新的账号，先导入一个吧。");
         }
@@ -2267,10 +2268,12 @@ export class CodexAccountManager implements vscode.Disposable {
             : "";
         void vscode.window.showInformationMessage(`额度刷新完成：成功 ${refreshedCount} 个，失败 ${failedCount} 个${switchedSuffix}。`);
       }
-
-
-
     } finally {
+      try {
+        await grokRefresh;
+      } catch {
+        // Grok 失败已在 refreshGrokPeriodRemaining 内消化；此处仅确保 join
+      }
       this.refreshing = false;
       await this.refreshStatusBar();
     }
