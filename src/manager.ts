@@ -310,7 +310,6 @@ export class CodexAccountManager implements vscode.Disposable {
       vscode.commands.registerCommand("codexAccountManager.switchAccount", () => this.switchAccount()),
       vscode.commands.registerCommand("codexAccountManager.switchToLastAccount", () => this.switchToLastAccount()),
       vscode.commands.registerCommand("codexAccountManager.refreshQuotas", () => this.refreshAllQuotas(false)),
-      vscode.commands.registerCommand("codexAccountManager.refreshQuotasFromTooltip", () => this.refreshQuotasFromTooltip()),
       vscode.commands.registerCommand("codexAccountManager.loginNewAccount", () => this.loginNewAccount()),
       vscode.commands.registerCommand("codexAccountManager.dismissExternalAuthNotice", () => this.dismissExternalAuthNotice()),
       vscode.commands.registerCommand("codexAccountManager.renameAccount", () => this.renameAccount()),
@@ -556,11 +555,6 @@ export class CodexAccountManager implements vscode.Disposable {
   }
 
 
-  private async refreshQuotasFromTooltip(): Promise<void> {
-    await this.refreshAllQuotas(false);
-    this.statusBar.forceTooltipRefresh();
-  }
-
   private async refreshSingleAccount(accountId?: string): Promise<void> {
     if (!accountId) {
       return;
@@ -570,8 +564,8 @@ export class CodexAccountManager implements vscode.Disposable {
       return;
     }
     const ok = await this.refreshQuotaForAccount(accountId, true);
-    await this.statusBar.forceTooltipRefresh();
-    // 刷新结果通过 tooltip 和状态栏即可体现，不弹通知
+    this.statusBar.forceStatusBarRefresh();
+    // 刷新结果直接体现在状态栏与底部面板，不弹通知
   }
 
   private buildAccountDescription(account: AccountProfile): string {
