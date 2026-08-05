@@ -1,5 +1,5 @@
 {
-  "name": "codex-cluade-account-manager",
+  "name": "codex-claude-account-manager",
   "displayName": "Konghai Codex & Claude Code Account Manager",
   "description": "管理多个 Codex 账号、自动刷新 5 小时/7 天可用额度，并同步切换官方 Codex 扩展账号",
   "version": "0.0.81",
