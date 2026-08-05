@@ -3,11 +3,12 @@ import {
   formatAccountLevel,
   formatClaudeCompactSegment,
   formatClaudeQuotaProgress,
-  getClaudeResetAfterSeconds,
   formatGrokCompactSegment,
   formatGrokQuotaProgress,
   formatQuotaSummary,
+  getClaudeResetAfterSeconds,
   getGrokResetAfterSeconds,
+  truncateErrorSummary,
 } from "./accountPresentation";
 import { AccountProfile, ClaudeUsageSnapshot, ExternalAuthNotice, GrokPeriodSnapshot } from "./types";
 
@@ -458,9 +459,9 @@ function formatClaudeDetailMeta(snapshot: ClaudeUsageSnapshot | undefined): stri
   if (snapshot.fetchedAt) {
     bits.push(`更新 ${formatClock(snapshot.fetchedAt)}`);
   }
-  if (snapshot.error) {
-    const raw = snapshot.error.trim();
-    bits.push(raw.length > 40 ? `${raw.slice(0, 37)}…` : raw);
+  const errorSummary = truncateErrorSummary(snapshot.error);
+  if (errorSummary) {
+    bits.push(errorSummary);
   }
   return bits.length ? `<div class="row muted">${escapeHtml(bits.join(" · "))}</div>` : "";
 }

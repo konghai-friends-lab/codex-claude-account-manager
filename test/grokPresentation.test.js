@@ -223,12 +223,30 @@ test("状态栏极简行：CC 接入后三段均有数据", () => {
       periodLabel: "7d",
       fetchedAt: "2026-08-05T00:00:00.000Z",
     },
-    undefined,
-    CC_SNAPSHOT,
+    { claudeSnapshot: CC_SNAPSHOT },
   );
   // CC 取 7d=97，不取 5h=93
   assert.equal(line, "🟩97% · 🟩77% · 🟨44%");
   assert.doesNotMatch(line, /93%/);
+});
+
+test("状态栏极简行：CC 快照必须经 options 传入才生效", () => {
+  // 回归守护：claudeSnapshot 曾是 options 之后的可选位置参数，
+  // 漏传时 TS 不报错，导致状态栏永远显示 CC 占位（tooltip 却是好的）。
+  // 收进 options 后，这里同时锁住「传了就必须生效」。
+  const codex = {
+    primary: { usedPercent: 90, availablePercent: 10 },
+    secondary: { usedPercent: 23, availablePercent: 77 },
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  };
+  const withCC = formatStatusBarQuotaLine(codex, undefined, {
+    codexUnavailable: false,
+    claudeSnapshot: CC_SNAPSHOT,
+  });
+  assert.match(withCC, /^🟩97%/, "传入 CC 快照时首段必须是真实数据");
+
+  const withoutCC = formatStatusBarQuotaLine(codex, undefined, { codexUnavailable: false });
+  assert.match(withoutCC, /^⬜—/, "未传 CC 快照时首段才是占位");
 });
 
 test("状态栏极简行：codex 不可用", () => {

@@ -4,6 +4,7 @@ import {
   formatClaudeCompactSegment,
   formatClaudeQuotaProgress,
   getClaudeResetAfterSeconds,
+  truncateErrorSummary,
   formatGrokCompactSegment,
   formatGrokQuotaProgress,
   formatQuotaSummary,
@@ -249,9 +250,9 @@ function formatClaudeTooltipBlock(snapshot: ClaudeUsageSnapshot | undefined): st
   if (updatedAt) {
     details.push(`更新 ${updatedAt}`);
   }
-  if (snapshot?.error) {
-    const raw = snapshot.error.trim();
-    details.push(raw.length > 40 ? `${raw.slice(0, 37)}…` : raw);
+  const errorSummary = truncateErrorSummary(snapshot?.error);
+  if (errorSummary) {
+    details.push(errorSummary);
   }
   if (details.length > 0) {
     lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${escapeMarkdown(details.join(" · "))}  \n`);
@@ -694,7 +695,8 @@ export class StatusBarController implements vscode.Disposable {
       // 通知文案已较长：只保留极简进度，避免整条被挤出
       const line = formatStatusBarQuotaLine(activeAccount?.quota, grokSnapshot, {
         codexUnavailable: !activeAccount,
-      }, claudeSnapshot);
+        claudeSnapshot,
+      });
       this.quotaItem.text = `${getNoticeIcon(notice)} ${line}${invisibleRefreshMarker}`;
       this.quotaItem.accessibilityInformation = {
         label: `${noticeText}。CC · Codex · Grok 7d：${line}`,
@@ -705,6 +707,7 @@ export class StatusBarController implements vscode.Disposable {
     const leadingIcon = getLeadingIcon(activeAccount, refreshing);
     const line = formatStatusBarQuotaLine(activeAccount?.quota, grokSnapshot, {
       codexUnavailable: !activeAccount,
+      claudeSnapshot,
     });
     this.quotaItem.text = `${leadingIcon} ${line}${invisibleRefreshMarker}`;
     this.quotaItem.accessibilityInformation = {

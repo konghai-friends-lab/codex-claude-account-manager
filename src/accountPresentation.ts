@@ -191,6 +191,18 @@ export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefine
     : `Grok ${icon}${percentage}`;
 }
 
+/**
+ * 错误摘要截断：展示层统一到 40 字符。
+ * 这些字符串来自外部接口响应，不设上限会挤爆 tooltip 与面板行。
+ */
+export function truncateErrorSummary(raw: string | undefined, max = 40): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > max ? `${trimmed.slice(0, max - 3)}…` : trimmed;
+}
+
 /** 状态栏 CC 占位：始终带 CC 标记；常见失败用短后缀 */
 export function formatClaudePlaceholder(reason?: string): string {
   const detail = reason?.trim();
@@ -324,11 +336,10 @@ export function formatGrokCompactProgressChip(
 export function formatStatusBarQuotaLine(
   quota: QuotaSnapshot | undefined,
   grokSnapshot: GrokPeriodSnapshot | undefined,
-  options?: { codexUnavailable?: boolean },
-  claudeSnapshot?: ClaudeUsageSnapshot,
+  options?: { codexUnavailable?: boolean; claudeSnapshot?: ClaudeUsageSnapshot },
 ): string {
   // CC 只反映 7d，与 Codex 处理一致，保持状态栏三段
-  const ccChip = formatClaudeCompactProgressChip(claudeSnapshot);
+  const ccChip = formatClaudeCompactProgressChip(options?.claudeSnapshot);
   // Codex 固定用 secondary（7d），不再混显 5h
   const codexUnavailable = Boolean(options?.codexUnavailable) || !quota?.secondary;
   const codexChip = formatCompactProgressChip(quota?.secondary, codexUnavailable);
