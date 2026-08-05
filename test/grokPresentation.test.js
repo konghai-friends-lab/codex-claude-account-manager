@@ -2,7 +2,11 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
-  formatClaudeCodeCompactPlaceholder,
+  formatClaudeCompactProgressChip,
+  formatClaudeCompactSegment,
+  formatClaudePlaceholder,
+  formatClaudeQuotaProgress,
+  getClaudeResetAfterSeconds,
   formatCodexCompactSegment,
   formatCompactProgressChip,
   formatGrokCompactProgressChip,
@@ -100,8 +104,74 @@ test("formatCodexCompactSegment 用产品名 codex 而非账号名", () => {
   assert.doesNotMatch(text, /@|用户/);
 });
 
-test("formatClaudeCodeCompactPlaceholder 5h/7d 占位", () => {
-  assert.equal(formatClaudeCodeCompactPlaceholder(), "CC 5h — · CC 7d —");
+const CC_SNAPSHOT = {
+  fiveHour: { usedPercent: 7, availablePercent: 93, windowMinutes: 300 },
+  fiveHourResetAt: "2026-08-05T08:00:00.000Z",
+  sevenDay: { usedPercent: 3, availablePercent: 97, windowMinutes: 10080 },
+  sevenDayResetAt: "2026-08-11T22:00:00.000Z",
+  fetchedAt: "2026-08-05T00:00:00.000Z",
+};
+
+test("formatClaudeCompactSegment 双窗口带标签", () => {
+  const text = formatClaudeCompactSegment(CC_SNAPSHOT);
+  assert.equal(text, "CC 5h 🟩93% · CC 7d 🟩97%");
+});
+
+test("formatClaudeCompactSegment 单窗口缺失时显示暂不可用而非 0%", () => {
+  const text = formatClaudeCompactSegment({
+    sevenDay: { usedPercent: 3, availablePercent: 97 },
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  });
+  assert.match(text, /CC 5h 暂不可用/);
+  assert.match(text, /97%/);
+  assert.doesNotMatch(text, /0%/);
+});
+
+test("formatClaudeCompactSegment 无数据 / 错误时走占位", () => {
+  assert.equal(formatClaudeCompactSegment(undefined), "CC —");
+  assert.equal(
+    formatClaudeCompactSegment({ fetchedAt: "x", error: "未登录" }),
+    "CC 未登录",
+  );
+});
+
+test("formatClaudePlaceholder 常见失败短后缀", () => {
+  assert.equal(formatClaudePlaceholder("未登录"), "CC 未登录");
+  assert.equal(formatClaudePlaceholder("Claude usage HTTP 401"), "CC 鉴权失败");
+  assert.equal(formatClaudePlaceholder("请求超时（20000ms）"), "CC 超时");
+  assert.equal(formatClaudePlaceholder(undefined), "CC —");
+});
+
+test("formatClaudeCompactProgressChip 只反映 7d，不用 5h", () => {
+  // 状态栏保持三段：CC 芯片必须取 7d(97%)，不能取 5h(93%)
+  const chip = formatClaudeCompactProgressChip(CC_SNAPSHOT);
+  assert.match(chip, /97%/);
+  assert.doesNotMatch(chip, /93%/);
+  assert.doesNotMatch(chip, /CC|7d|5h/i);
+  assert.equal(formatClaudeCompactProgressChip(undefined), "⬜—");
+});
+
+test("formatClaudeQuotaProgress 缺失窗口输出暂不可用", () => {
+  assert.equal(formatClaudeQuotaProgress(undefined, "fiveHour"), "CC 5h 暂不可用");
+  assert.match(formatClaudeQuotaProgress(CC_SNAPSHOT, "sevenDay", 8), /CC 7d/);
+});
+
+test("getClaudeResetAfterSeconds 按当前时间现算，不冻结", () => {
+  // AE5 的自动化证明：同一快照、不同 nowMs 必须给出不同倒计时
+  const t1 = Date.parse("2026-08-05T00:00:00.000Z");
+  const t2 = t1 + 3600_000;
+  const a = getClaudeResetAfterSeconds(CC_SNAPSHOT, "sevenDay", t1);
+  const b = getClaudeResetAfterSeconds(CC_SNAPSHOT, "sevenDay", t2);
+  assert.equal(a - b, 3600);
+});
+
+test("getClaudeResetAfterSeconds 无绝对时间时回退冻结秒数", () => {
+  const secs = getClaudeResetAfterSeconds(
+    { sevenDay: { usedPercent: 3, availablePercent: 97, resetAfterSeconds: 120 }, fetchedAt: "x" },
+    "sevenDay",
+    Date.now(),
+  );
+  assert.equal(secs, 120);
 });
 
 test("formatCompactProgressChip 无标题仅进度", () => {
@@ -136,8 +206,29 @@ test("状态栏极简行：CC · Codex · Grok，仅 7d，无标题", () => {
     },
   );
   // 顺序 CC · Codex(7d=77) · Grok；不用 5h=10
+  // 未传 CC 快照时首段仍为占位
   assert.equal(line, "⬜— · 🟩77% · 🟨44%");
   assert.doesNotMatch(line, /codex|CC|Grok|5h|10%/i);
+});
+
+test("状态栏极简行：CC 接入后三段均有数据", () => {
+  const line = formatStatusBarQuotaLine(
+    {
+      primary: { usedPercent: 90, availablePercent: 10 },
+      secondary: { usedPercent: 23, availablePercent: 77 },
+      fetchedAt: "2026-08-05T00:00:00.000Z",
+    },
+    {
+      window: { usedPercent: 56, availablePercent: 44 },
+      periodLabel: "7d",
+      fetchedAt: "2026-08-05T00:00:00.000Z",
+    },
+    undefined,
+    CC_SNAPSHOT,
+  );
+  // CC 取 7d=97，不取 5h=93
+  assert.equal(line, "🟩97% · 🟩77% · 🟨44%");
+  assert.doesNotMatch(line, /93%/);
 });
 
 test("状态栏极简行：codex 不可用", () => {

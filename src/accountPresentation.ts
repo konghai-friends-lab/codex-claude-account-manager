@@ -1,4 +1,4 @@
-import { AccountProfile, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
+import { AccountProfile, ClaudeUsageSnapshot, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
 
 export type QuotaTone = "good" | "warning" | "low" | "critical" | "unknown";
 export type AutoSwitchPriority = "lowest-window-first" | "primary-first" | "secondary-first";
@@ -191,12 +191,102 @@ export function formatGrokCompactSegment(snapshot: GrokPeriodSnapshot | undefine
     : `Grok ${icon}${percentage}`;
 }
 
+/** 状态栏 CC 占位：始终带 CC 标记；常见失败用短后缀 */
+export function formatClaudePlaceholder(reason?: string): string {
+  const detail = reason?.trim();
+  if (!detail) {
+    return "CC —";
+  }
+  if (/未登录|no login|not logged/i.test(detail)) {
+    return "CC 未登录";
+  }
+  if (/HTTP 401|HTTP 403|鉴权|unauthorized/i.test(detail)) {
+    return "CC 鉴权失败";
+  }
+  if (/超时|timeout/i.test(detail)) {
+    return "CC 超时";
+  }
+  return "CC —";
+}
+
 /**
- * Claude Code 额度占位（尚未接入真实数据）。
- * 详情面板等较长场景：`CC 5h — · CC 7d —`
+ * 详情面板 / tooltip 的 CC 紧凑段：`CC 5h 🟩93% · CC 7d 🟩97%`。
+ * 单个窗口缺失时该段显示「暂不可用」，绝不画成 0%。
  */
-export function formatClaudeCodeCompactPlaceholder(): string {
-  return "CC 5h — · CC 7d —";
+export function formatClaudeCompactSegment(snapshot: ClaudeUsageSnapshot | undefined): string {
+  if (!snapshot) {
+    return formatClaudePlaceholder("暂无数据");
+  }
+  if (!snapshot.fiveHour && !snapshot.sevenDay) {
+    return formatClaudePlaceholder(snapshot.error);
+  }
+
+  const parts: string[] = [];
+  for (const [label, window] of [
+    ["5h", snapshot.fiveHour],
+    ["7d", snapshot.sevenDay],
+  ] as const) {
+    if (!window) {
+      parts.push(`CC ${label} 暂不可用`);
+      continue;
+    }
+    const percentage = formatQuotaPercentage(window).replace(/\.0%$/, "%");
+    parts.push(`CC ${label} ${getQuotaToneIcon(window)}${percentage}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * CC 状态栏极简芯片（无 “CC/7d” 前缀）。
+ * 只反映 7d 窗口：状态栏保持三段，与 Codex 的处理一致。
+ */
+export function formatClaudeCompactProgressChip(
+  snapshot: ClaudeUsageSnapshot | undefined,
+): string {
+  if (!snapshot?.sevenDay) {
+    return formatCompactProgressChip(undefined, true);
+  }
+  return formatCompactProgressChip(snapshot.sevenDay);
+}
+
+/**
+ * 从 CC 快照现算某个窗口的重置剩余秒数。
+ * 优先绝对时间字段，避免使用抓取时冻结的 resetAfterSeconds。
+ */
+export function getClaudeResetAfterSeconds(
+  snapshot: ClaudeUsageSnapshot | undefined,
+  which: "fiveHour" | "sevenDay",
+  nowMs = Date.now(),
+): number | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  const resetAt = which === "fiveHour" ? snapshot.fiveHourResetAt : snapshot.sevenDayResetAt;
+  if (resetAt) {
+    const endMs = Date.parse(resetAt);
+    if (Number.isFinite(endMs)) {
+      return Math.max(0, Math.round((endMs - nowMs) / 1000));
+    }
+  }
+  const window = which === "fiveHour" ? snapshot.fiveHour : snapshot.sevenDay;
+  if (window?.resetAfterSeconds !== undefined) {
+    return Math.max(0, window.resetAfterSeconds);
+  }
+  return undefined;
+}
+
+/** 悬停用 CC 额度行（进度条风格，与 Codex / Grok 一致） */
+export function formatClaudeQuotaProgress(
+  snapshot: ClaudeUsageSnapshot | undefined,
+  which: "fiveHour" | "sevenDay",
+  barLength = DEFAULT_QUOTA_BAR_LENGTH,
+): string {
+  const window = which === "fiveHour" ? snapshot?.fiveHour : snapshot?.sevenDay;
+  const label = which === "fiveHour" ? "CC 5h" : "CC 7d";
+  if (!window) {
+    return `${label} 暂不可用`;
+  }
+  return formatQuotaProgress(label, window, barLength);
 }
 
 /**
@@ -235,9 +325,10 @@ export function formatStatusBarQuotaLine(
   quota: QuotaSnapshot | undefined,
   grokSnapshot: GrokPeriodSnapshot | undefined,
   options?: { codexUnavailable?: boolean },
+  claudeSnapshot?: ClaudeUsageSnapshot,
 ): string {
-  // CC 尚未接入：单芯片占位（只表示 7d）
-  const ccChip = formatCompactProgressChip(undefined, true);
+  // CC 只反映 7d，与 Codex 处理一致，保持状态栏三段
+  const ccChip = formatClaudeCompactProgressChip(claudeSnapshot);
   // Codex 固定用 secondary（7d），不再混显 5h
   const codexUnavailable = Boolean(options?.codexUnavailable) || !quota?.secondary;
   const codexChip = formatCompactProgressChip(quota?.secondary, codexUnavailable);

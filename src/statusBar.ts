@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import {
   formatAccountLevel,
+  formatClaudeCompactSegment,
+  formatClaudeQuotaProgress,
+  getClaudeResetAfterSeconds,
   formatGrokCompactSegment,
   formatGrokQuotaProgress,
   formatQuotaSummary,
@@ -9,7 +12,7 @@ import {
   getQuotaAvailablePercent,
 } from "./accountPresentation";
 
-import { AccountProfile, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
+import { AccountProfile, ClaudeUsageSnapshot, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot, QuotaWindow } from "./types";
 
 
 
@@ -224,6 +227,36 @@ function formatResetFromSeconds(totalSeconds: number | undefined): string | unde
     parts.push(`${minutes}分钟`);
   }
   return parts.join("");
+}
+
+function formatClaudeTooltipBlock(snapshot: ClaudeUsageSnapshot | undefined): string {
+  const lines: string[] = [];
+  lines.push(`**CC** · ${formatClaudeCompactSegment(snapshot)}  \n`);
+  lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${formatClaudeQuotaProgress(snapshot, "fiveHour", 8)}  \n`);
+  lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${formatClaudeQuotaProgress(snapshot, "sevenDay", 8)}  \n`);
+
+  const details: string[] = [];
+  // 倒计时以绝对时间现算，避免使用抓取时冻结的秒数
+  const fiveHourReset = formatResetFromSeconds(getClaudeResetAfterSeconds(snapshot, "fiveHour"));
+  if (fiveHourReset) {
+    details.push(`5h 重置 ${fiveHourReset}`);
+  }
+  const sevenDayReset = formatResetFromSeconds(getClaudeResetAfterSeconds(snapshot, "sevenDay"));
+  if (sevenDayReset) {
+    details.push(`7d 重置 ${sevenDayReset}`);
+  }
+  const updatedAt = formatTimestamp(snapshot?.fetchedAt);
+  if (updatedAt) {
+    details.push(`更新 ${updatedAt}`);
+  }
+  if (snapshot?.error) {
+    const raw = snapshot.error.trim();
+    details.push(raw.length > 40 ? `${raw.slice(0, 37)}…` : raw);
+  }
+  if (details.length > 0) {
+    lines.push(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}${escapeMarkdown(details.join(" · "))}  \n`);
+  }
+  return lines.join("");
 }
 
 function formatGrokTooltipBlock(snapshot: GrokPeriodSnapshot | undefined): string {
@@ -449,6 +482,7 @@ type StatusBarRenderState = {
   showEmail: boolean;
   notice: ExternalAuthNotice | undefined;
   grokSnapshot: GrokPeriodSnapshot | undefined;
+  claudeSnapshot: ClaudeUsageSnapshot | undefined;
 };
 
 
@@ -476,6 +510,7 @@ export class StatusBarController implements vscode.Disposable {
     showEmail: true,
     notice: undefined,
     grokSnapshot: undefined,
+    claudeSnapshot: undefined,
   };
 
   private renderNonce = 0;
@@ -533,8 +568,8 @@ export class StatusBarController implements vscode.Disposable {
 
   /** 供点击用量条时弹出：与原先悬停详情同款 Markdown */
   buildDetailsMarkdown(): vscode.MarkdownString {
-    const { accounts, activeAccountId, showEmail, notice, grokSnapshot } = this.lastRenderState;
-    return this.buildDetailsTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot);
+    const { accounts, activeAccountId, showEmail, notice, grokSnapshot, claudeSnapshot } = this.lastRenderState;
+    return this.buildDetailsTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot, claudeSnapshot);
   }
 
   async setSortBy(sortBy: string): Promise<void> {
@@ -557,6 +592,7 @@ export class StatusBarController implements vscode.Disposable {
     showEmail: boolean,
     notice: ExternalAuthNotice | undefined,
     grokSnapshot?: GrokPeriodSnapshot,
+    claudeSnapshot?: ClaudeUsageSnapshot,
   ): void {
     this.lastRenderState = {
       accounts: [...accounts],
@@ -565,6 +601,7 @@ export class StatusBarController implements vscode.Disposable {
       showEmail,
       notice,
       grokSnapshot,
+      claudeSnapshot,
     };
     this.renderQuotaItem();
     this.renderMenuItem();
@@ -644,20 +681,20 @@ export class StatusBarController implements vscode.Disposable {
   }
 
   private renderQuotaItem(): void {
-    const { accounts, activeAccountId, refreshing, showEmail, notice, grokSnapshot } = this.lastRenderState;
+    const { accounts, activeAccountId, refreshing, showEmail, notice, grokSnapshot, claudeSnapshot } = this.lastRenderState;
     const activeAccount = accounts.find((account) => account.id === activeAccountId);
     const invisibleRefreshMarker = this.renderNonce % 2 === 0 ? "\u200B" : "\u200C";
     const noticeText = formatNoticeText(notice);
 
     this.quotaItem.command = "codexAccountManager.showQuotaDetails";
     // 详情内容放进 tooltip，点击命令再弹出同款 Markdown 气泡（见 showQuotaDetails）
-    this.quotaItem.tooltip = this.buildDetailsTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot);
+    this.quotaItem.tooltip = this.buildDetailsTooltip(accounts, activeAccountId, showEmail, notice, grokSnapshot, claudeSnapshot);
 
     if (noticeText) {
       // 通知文案已较长：只保留极简进度，避免整条被挤出
       const line = formatStatusBarQuotaLine(activeAccount?.quota, grokSnapshot, {
         codexUnavailable: !activeAccount,
-      });
+      }, claudeSnapshot);
       this.quotaItem.text = `${getNoticeIcon(notice)} ${line}${invisibleRefreshMarker}`;
       this.quotaItem.accessibilityInformation = {
         label: `${noticeText}。CC · Codex · Grok 7d：${line}`,
@@ -684,6 +721,7 @@ export class StatusBarController implements vscode.Disposable {
     showEmail: boolean,
     notice: ExternalAuthNotice | undefined,
     grokSnapshot?: GrokPeriodSnapshot,
+    claudeSnapshot?: ClaudeUsageSnapshot,
   ): vscode.MarkdownString {
     const tooltip = new vscode.MarkdownString(undefined, true);
     tooltip.supportHtml = true;
@@ -707,7 +745,7 @@ export class StatusBarController implements vscode.Disposable {
 
     // 产品顺序与状态栏 / 底部面板一致：CC → Codex → Grok
     tooltip.appendMarkdown("**额度一览**\n\n");
-    tooltip.appendMarkdown(`${TOOLTIP_ACCOUNT_DETAIL_INDENT}CC 5h 暂不可用 · CC 7d 暂不可用  \n`);
+    tooltip.appendMarkdown(formatClaudeTooltipBlock(claudeSnapshot));
     tooltip.appendMarkdown("\n---\n\n");
     tooltip.appendMarkdown("**Codex 账号列表**\n\n");
 

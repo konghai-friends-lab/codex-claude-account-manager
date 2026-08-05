@@ -1,13 +1,15 @@
 import * as vscode from "vscode";
 import {
   formatAccountLevel,
-  formatClaudeCodeCompactPlaceholder,
+  formatClaudeCompactSegment,
+  formatClaudeQuotaProgress,
+  getClaudeResetAfterSeconds,
   formatGrokCompactSegment,
   formatGrokQuotaProgress,
   formatQuotaSummary,
   getGrokResetAfterSeconds,
 } from "./accountPresentation";
-import { AccountProfile, ExternalAuthNotice, GrokPeriodSnapshot } from "./types";
+import { AccountProfile, ClaudeUsageSnapshot, ExternalAuthNotice, GrokPeriodSnapshot } from "./types";
 
 export type BottomPanelMode = "details" | "menu";
 
@@ -24,6 +26,7 @@ export interface QuotaDetailsPayload {
   showEmail: boolean;
   notice: ExternalAuthNotice | undefined;
   grokSnapshot: GrokPeriodSnapshot | undefined;
+  claudeSnapshot: ClaudeUsageSnapshot | undefined;
   sortByLabel: string;
   sortOrderLabel: string;
 }
@@ -355,8 +358,10 @@ export class BottomPanelController implements vscode.WebviewViewProvider, vscode
     parts.push(`<div class="section-title">额度一览</div>`);
 
     parts.push(`<div class="card">
-      <div class="row"><strong>CC</strong> · ${escapeHtml(formatClaudeCodeCompactPlaceholder())}</div>
-      <div class="row muted">Claude Code 5h / 7d 暂未接入</div>
+      <div class="row"><strong>CC</strong> · ${escapeHtml(formatClaudeCompactSegment(data.claudeSnapshot))}</div>
+      <div class="row muted">${formatClaudeQuotaProgress(data.claudeSnapshot, "fiveHour", 8)}</div>
+      <div class="row muted">${formatClaudeQuotaProgress(data.claudeSnapshot, "sevenDay", 8)}</div>
+      ${formatClaudeDetailMeta(data.claudeSnapshot)}
     </div>`);
 
     parts.push(`<div class="section-title" style="margin-top:12px;">Codex 账号列表</div>`);
@@ -431,6 +436,33 @@ function escapeHtml(value: string): string {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ");
+}
+
+/**
+ * CC 详情行。错误摘要截断到 40 字符，与 Codex 一致——
+ * 这里渲染的是第三方响应体，不采用 Grok 那行不设上限的写法。
+ */
+function formatClaudeDetailMeta(snapshot: ClaudeUsageSnapshot | undefined): string {
+  if (!snapshot) {
+    return "";
+  }
+  const bits: string[] = [];
+  const fiveHourReset = getClaudeResetAfterSeconds(snapshot, "fiveHour");
+  if (fiveHourReset !== undefined) {
+    bits.push(`5h 重置 ${formatDuration(fiveHourReset)}`);
+  }
+  const sevenDayReset = getClaudeResetAfterSeconds(snapshot, "sevenDay");
+  if (sevenDayReset !== undefined) {
+    bits.push(`7d 重置 ${formatDuration(sevenDayReset)}`);
+  }
+  if (snapshot.fetchedAt) {
+    bits.push(`更新 ${formatClock(snapshot.fetchedAt)}`);
+  }
+  if (snapshot.error) {
+    const raw = snapshot.error.trim();
+    bits.push(raw.length > 40 ? `${raw.slice(0, 37)}…` : raw);
+  }
+  return bits.length ? `<div class="row muted">${escapeHtml(bits.join(" · "))}</div>` : "";
 }
 
 function formatGrokDetailMeta(snapshot: GrokPeriodSnapshot | undefined): string {

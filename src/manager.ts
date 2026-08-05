@@ -18,13 +18,15 @@ import { AccountHealthCheck, evaluateAccountHealth, renderAccountHealthMarkdown 
 import { clearCodexAuthFile, getDefaultCodexAuthPath, getDefaultCodexSessionsPath, loadAuthDataFromFile, syncCodexAuthFile } from "./auth";
 
 import { BottomPanelController, ManageMenuAction } from "./bottomPanel";
+import { loadClaudeAuth } from "./claudeAuth";
+import { ClaudeQuotaClient, buildClaudeSnapshot } from "./claudeQuotaClient";
 import { loadGrokAuthFromFile } from "./grokAuth";
 import { GrokQuotaClient } from "./grokQuotaClient";
 import { CodexQuotaClient } from "./quotaClient";
 import { StatusBarController } from "./statusBar";
 import { AccountStore } from "./store";
 import { CodexTokenRecoveryClient, shouldAttemptTokenRecovery, isSessionRevokedError, isTokenExpiredAndUnrecoverableError, isUnrecoverableAuthError } from "./tokenRecovery";
-import { AccountProfile, AuthData, ExportedAccountItem, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot } from "./types";
+import { AccountProfile, AuthData, ClaudeUsageSnapshot, ExportedAccountItem, ExternalAuthNotice, GrokPeriodSnapshot, QuotaSnapshot } from "./types";
 
 
 
@@ -134,6 +136,8 @@ export class CodexAccountManager implements vscode.Disposable {
   private lastDetectedExternalAuthFingerprint: string | undefined;
   /** 本机当前 Grok 登录的周期剩余快照（与 Codex 账号 store 分离） */
   private grokSnapshot: GrokPeriodSnapshot | undefined;
+  /** 本机当前 Claude Code 登录的 5h / 7d 用量快照 */
+  private claudeSnapshot: ClaudeUsageSnapshot | undefined;
   /** 每次手动切号时递增，供 maybeAutoSwitchLowQuotaAccount 检测是否被抢先 */
   private manualSwitchGeneration = 0;
   private readonly authPath = getDefaultCodexAuthPath();
@@ -511,6 +515,7 @@ export class CodexAccountManager implements vscode.Disposable {
       this.showEmailInTooltip,
       this.externalAuthNotice,
       this.grokSnapshot,
+      this.claudeSnapshot,
     );
   }
 
@@ -535,6 +540,19 @@ export class CodexAccountManager implements vscode.Disposable {
         error: error instanceof Error ? error.message : "刷新 Grok 周期额度失败",
       };
     }
+  }
+
+
+  /**
+   * 刷新本机 Claude Code 用量；失败只写占位快照，不抛错、不打断 Codex 流程。
+   * 凭据每轮现读、不缓存：这样 CC 退出登录会在下一轮生效，
+   * 令牌也不会长期驻留在 manager 上。
+   */
+  private async refreshClaudeUsage(): Promise<void> {
+    this.claudeSnapshot = await buildClaudeSnapshot(
+      () => loadClaudeAuth(),
+      (auth) => new ClaudeQuotaClient(auth, this.requestTimeoutMs),
+    );
   }
 
 
@@ -1075,6 +1093,7 @@ export class CodexAccountManager implements vscode.Disposable {
       showEmail: this.showEmailInTooltip,
       notice: this.externalAuthNotice,
       grokSnapshot: this.grokSnapshot,
+      claudeSnapshot: this.claudeSnapshot,
       sortByLabel: this.statusBar.getSortByLabel(),
       sortOrderLabel: this.statusBar.getSortOrderLabel(),
     });
@@ -2236,15 +2255,21 @@ export class CodexAccountManager implements vscode.Disposable {
     this.refreshing = true;
     await this.refreshStatusBar();
 
-    // Grok 与 Codex 并行；finally 必须 join，避免异常路径留下陈旧 Grok UI（审查 #4）
+    // Grok / CC 与 Codex 并行；finally 必须 join，避免异常路径留下陈旧 UI（审查 #4）。
+    // 注意：join 只保证「被 await 到」，不保证耗时有界——CC 的凭据读取与
+    // HTTP 各自都设了超时，否则会撑长整个刷新窗口并占住 refreshing 标志，
+    // 连带冻结 Codex 与 Grok 的后续刷新。
     let grokRefresh: Promise<void> = Promise.resolve();
+    let claudeRefresh: Promise<void> = Promise.resolve();
 
     try {
       grokRefresh = this.refreshGrokPeriodRemaining();
+      claudeRefresh = this.refreshClaudeUsage();
 
       const accounts = await this.store.listAccounts();
       if (accounts.length === 0) {
         await grokRefresh;
+        await claudeRefresh;
         if (!silent) {
           void vscode.window.showInformationMessage("还没有可刷新的账号，先导入一个吧。");
         }
@@ -2267,6 +2292,7 @@ export class CodexAccountManager implements vscode.Disposable {
       }
 
       await grokRefresh;
+      await claudeRefresh;
 
       // 刷新额度完成后顺带同步当前激活账号的 planType：
       // 用户在 OpenAI 后台升级套餐后，auth.json 里的 chatgpt_plan_type 已更新，
@@ -2306,6 +2332,11 @@ export class CodexAccountManager implements vscode.Disposable {
         await grokRefresh;
       } catch {
         // Grok 失败已在 refreshGrokPeriodRemaining 内消化；此处仅确保 join
+      }
+      try {
+        await claudeRefresh;
+      } catch {
+        // CC 失败已在 buildClaudeSnapshot 内消化；此处仅确保 join
       }
       this.refreshing = false;
       await this.refreshStatusBar();

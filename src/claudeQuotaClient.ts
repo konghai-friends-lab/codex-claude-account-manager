@@ -146,6 +146,39 @@ export function parseUsageResponseToSnapshot(
   };
 }
 
+/**
+ * 生成一次刷新的 CC 快照，失败一律降级为占位快照。
+ *
+ * 与 VS Code API 解耦，因此可以直接单测「失败时是否真的写了占位」——
+ * 这是写入顺序属性，纯展示函数的测试观察不到。
+ */
+export async function buildClaudeSnapshot(
+  loadAuth: () => Promise<ClaudeAuthData | null>,
+  createClient: (auth: ClaudeAuthData) => { fetchUsage: () => Promise<ClaudeUsageSnapshot> },
+  nowIso = new Date().toISOString(),
+): Promise<ClaudeUsageSnapshot> {
+  let auth: ClaudeAuthData | null = null;
+  try {
+    auth = await loadAuth();
+  } catch {
+    // 凭据读取本不该抛错；即便抛了也只降级，不打断刷新流程
+    return { fetchedAt: nowIso, error: "读取 Claude 凭据失败" };
+  }
+
+  if (!auth) {
+    return { fetchedAt: nowIso, error: "未登录" };
+  }
+
+  try {
+    return await createClient(auth).fetchUsage();
+  } catch (error) {
+    return {
+      fetchedAt: nowIso,
+      error: error instanceof Error ? error.message : "刷新 Claude 用量失败",
+    };
+  }
+}
+
 export class ClaudeQuotaClient {
   constructor(
     private readonly authData: ClaudeAuthData,
